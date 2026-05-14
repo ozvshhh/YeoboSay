@@ -5,8 +5,10 @@ on:
     paths:
       - "backend/**"
       - ".github/workflows/backend-ci.yml"
+
   push:
-    branches: [main]
+    branches:
+      - main
     paths:
       - "backend/**"
 
@@ -32,16 +34,21 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Prisma generate
+        run: npx prisma generate
+        env:
+          DATABASE_URL: "postgresql://user:password@localhost:5432/yeobosay"
+
       - name: Prisma validate
         run: npx prisma validate
         env:
           DATABASE_URL: "postgresql://user:password@localhost:5432/yeobosay"
 
       - name: Lint
-        run: npm run lint --if-present
+        run: npm run lint
 
       - name: Test
-        run: npm test --if-present
+        run: npm run test
 
       - name: Build
-        run: npm run build --if-present
+        run: npm run build
