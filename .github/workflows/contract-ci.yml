@@ -1,0 +1,54 @@
+name: Contract CI
+
+on:
+  pull_request:
+    paths:
+      - "contract/**"
+      - ".github/workflows/contract-ci.yml"
+
+  push:
+    branches:
+      - main
+    paths:
+      - "contract/**"
+
+jobs:
+  contract-check:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: contract
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check contract files exist
+        run: |
+          echo "Checking contract directory..."
+          find . -type f
+
+      - name: Validate JSON files
+        run: |
+          if find . -name "*.json" | grep -q .; then
+            find . -name "*.json" -print0 | xargs -0 -n1 jq empty
+          else
+            echo "No JSON files found. Skipping JSON validation."
+          fi
+
+      - name: Validate YAML files
+        run: |
+          if find . \( -name "*.yml" -o -name "*.yaml" \) | grep -q .; then
+            python - <<'PY'
+          import pathlib, yaml
+
+          files = list(pathlib.Path(".").rglob("*.yml")) + list(pathlib.Path(".").rglob("*.yaml"))
+          for file in files:
+              with open(file, "r", encoding="utf-8") as f:
+                  yaml.safe_load(f)
+              print(f"Valid YAML: {file}")
+          PY
+          else
+            echo "No YAML files found. Skipping YAML validation."
+          fi
