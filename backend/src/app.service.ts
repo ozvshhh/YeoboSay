@@ -1,8 +1,13 @@
 import { Injectable } from '@nestjs/common';
+import { HealthResponse } from './health-response';
 
 @Injectable()
 export class AppService {
-  getHello(): string {
-    return 'Hello World!';
+  getHealth(): HealthResponse {
+    return {
+      ok: true,
+      service: 'YeoboSay Backend',
+      timestamp: new Date().toISOString(),
+    };
   }
 }

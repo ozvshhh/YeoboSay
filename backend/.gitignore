@@ -46,4 +46,5 @@ tmp/
 temp/
 
 #prisma generated
+generated/
 backend/generated/

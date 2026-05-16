@@ -14,9 +14,13 @@ describe('AppController', () => {
     appController = app.get<AppController>(AppController);
   });
 
-  describe('root', () => {
-    it('should return "Hello World!"', () => {
-      expect(appController.getHello()).toBe('Hello World!');
+  describe('health', () => {
+    it('should return backend health status', () => {
+      expect(appController.getHealth()).toEqual({
+        ok: true,
+        service: 'YeoboSay Backend',
+        timestamp: expect.any(String) as string,
+      });
     });
   });
 });
