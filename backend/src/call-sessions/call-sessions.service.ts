@@ -1,22 +1,56 @@
 import {
+  BadGatewayException,
+  BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { CallSessionStatus } from '@prisma/client';
+import { CallSessionStatus, ConversationRole } from '@prisma/client';
 import type { CallSession, ConversationTurn } from '@prisma/client';
+import { OpenAiService } from '../openai/openai.service';
+import type { AssistantMessage } from '../openai/openai.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CallSessionResponseDto } from './call-session-response.dto';
 import {
   ConversationTurnListResponseDto,
   ConversationTurnResponseDto,
 } from './conversation-turn-response.dto';
+import { VoiceTurnResponseDto } from './voice-turn-response.dto';
 
 const CALL_SESSION_DURATION_MS = 10 * 60 * 1000;
+const RECENT_TURN_LIMIT = 12;
+const SUPPORTED_AUDIO_MIME_TYPE = 'audio/mp4';
+const ASSISTANT_FAILURE_MESSAGE =
+  '응답을 만드는 중 문제가 생겼어요. 잠시 후 다시 말해 주세요.';
+
+const RISK_KEYWORDS: Array<{ type: string; keywords: string[] }> = [
+  {
+    type: 'SELF_HARM',
+    keywords: ['죽고 싶', '살고 싶지', '자해', '극단적 선택'],
+  },
+  {
+    type: 'MEDICAL_EMERGENCY',
+    keywords: ['숨을 못', '가슴이 아파', '쓰러졌', '119', '응급실'],
+  },
+  {
+    type: 'HELP_REQUEST',
+    keywords: ['도와줘', '도움이 필요', '살려줘', '살려'],
+  },
+  {
+    type: 'EMOTIONAL_DISTRESS',
+    keywords: ['외로', '우울', '불안', '힘들', '괴로'],
+  },
+];
 
 @Injectable()
 export class CallSessionsService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(CallSessionsService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly openAiService: OpenAiService,
+  ) {}
 
   async create(): Promise<CallSessionResponseDto> {
     const startedAt = new Date();
@@ -58,6 +92,102 @@ export class CallSessionsService {
     };
   }
 
+  async processAudioTurn(
+    id: string,
+    audio?: Express.Multer.File,
+  ): Promise<VoiceTurnResponseDto> {
+    const session = await this.prisma.callSession.findUnique({
+      where: { id },
+    });
+
+    if (!session) {
+      throw new NotFoundException('Call session not found.');
+    }
+
+    if (session.status === CallSessionStatus.ENDED) {
+      throw new ConflictException('Call session is already ended.');
+    }
+
+    if (session.expiresAt.getTime() <= Date.now()) {
+      throw new ConflictException('Call session is expired.');
+    }
+
+    this.validateAudioUpload(audio);
+
+    const userText = await this.transcribeAudio(audio);
+    const riskType = this.detectRiskType(userText);
+    const riskFlag = Boolean(riskType);
+
+    if (riskFlag) {
+      this.logger.warn(
+        `Risk speech detected: callSessionId=${id} riskType=${riskType} text="${userText}"`,
+      );
+    }
+
+    await this.prisma.conversationTurn.create({
+      data: {
+        callSessionId: id,
+        role: ConversationRole.USER,
+        text: userText,
+        riskFlag,
+        riskType,
+      },
+    });
+
+    const messages = await this.buildAssistantMessages(id);
+
+    try {
+      const assistantText =
+        await this.openAiService.generateAssistantText(messages);
+      const assistantAudio =
+        await this.openAiService.synthesizeSpeech(assistantText);
+
+      await this.prisma.conversationTurn.create({
+        data: {
+          callSessionId: id,
+          role: ConversationRole.ASSISTANT,
+          text: assistantText,
+        },
+      });
+
+      return {
+        callSessionId: id,
+        userText,
+        assistantText,
+        audioMimeType: 'audio/mpeg',
+        audioBase64: assistantAudio.toString('base64'),
+        failed: false,
+        riskFlag,
+        riskType,
+      };
+    } catch (error) {
+      this.logger.error(
+        `Assistant response generation failed: callSessionId=${id}`,
+        error instanceof Error ? error.stack : undefined,
+      );
+
+      await this.prisma.conversationTurn.create({
+        data: {
+          callSessionId: id,
+          role: ConversationRole.ASSISTANT,
+          text: ASSISTANT_FAILURE_MESSAGE,
+          failed: true,
+        },
+      });
+
+      return {
+        callSessionId: id,
+        userText,
+        assistantText: ASSISTANT_FAILURE_MESSAGE,
+        audioMimeType: null,
+        audioBase64: null,
+        failed: true,
+        riskFlag,
+        riskType,
+      };
+    }
+  }
+
   async end(id: string): Promise<CallSessionResponseDto> {
     const session = await this.prisma.callSession.findUnique({
       where: { id },
@@ -91,6 +221,76 @@ export class CallSessionsService {
     if (!session) {
       throw new NotFoundException('Call session not found.');
     }
+  }
+
+  private validateAudioUpload(
+    audio?: Express.Multer.File,
+  ): asserts audio is Express.Multer.File {
+    if (!audio) {
+      throw new BadRequestException('Audio file is required.');
+    }
+
+    if (!audio.buffer?.length) {
+      throw new BadRequestException('Audio file is empty.');
+    }
+
+    if (audio.mimetype !== SUPPORTED_AUDIO_MIME_TYPE) {
+      throw new BadRequestException(
+        'Only audio/mp4 M4A uploads are supported.',
+      );
+    }
+  }
+
+  private async transcribeAudio(audio: Express.Multer.File): Promise<string> {
+    try {
+      const text = await this.openAiService.transcribeAudio(
+        audio.buffer,
+        audio.originalname || 'turn.m4a',
+        audio.mimetype,
+      );
+
+      if (!text) {
+        throw new BadRequestException('Audio transcription was empty.');
+      }
+
+      return text;
+    } catch (error) {
+      if (error instanceof BadRequestException) {
+        throw error;
+      }
+
+      this.logger.error(
+        'Audio transcription failed.',
+        error instanceof Error ? error.stack : undefined,
+      );
+      throw new BadGatewayException('Failed to transcribe audio.');
+    }
+  }
+
+  private detectRiskType(text: string): string | null {
+    const normalizedText = text.toLowerCase();
+    const matchedRisk = RISK_KEYWORDS.find((risk) =>
+      risk.keywords.some((keyword) =>
+        normalizedText.includes(keyword.toLowerCase()),
+      ),
+    );
+
+    return matchedRisk?.type ?? null;
+  }
+
+  private async buildAssistantMessages(
+    callSessionId: string,
+  ): Promise<AssistantMessage[]> {
+    const recentTurns = await this.prisma.conversationTurn.findMany({
+      where: { callSessionId },
+      orderBy: { createdAt: 'desc' },
+      take: RECENT_TURN_LIMIT,
+    });
+
+    return recentTurns.reverse().map((turn) => ({
+      role: turn.role === ConversationRole.USER ? 'user' : 'assistant',
+      content: turn.text,
+    }));
   }
 
   private toCallSessionResponse(session: CallSession): CallSessionResponseDto {
