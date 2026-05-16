@@ -3,6 +3,7 @@ import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from './../src/app.module';
+import { OpenAiService } from './../src/openai/openai.service';
 import { PrismaService } from './../src/prisma/prisma.service';
 
 describe('AppController (e2e)', () => {
@@ -14,10 +15,16 @@ describe('AppController (e2e)', () => {
       update: jest.Mock;
     };
     conversationTurn: {
+      create: jest.Mock;
       findMany: jest.Mock;
     };
     onModuleInit: jest.Mock;
     onModuleDestroy: jest.Mock;
+  };
+  let openAiService: {
+    transcribeAudio: jest.Mock;
+    generateAssistantText: jest.Mock;
+    synthesizeSpeech: jest.Mock;
   };
 
   const startedAt = new Date('2026-05-16T05:00:00.000Z');
@@ -31,10 +38,16 @@ describe('AppController (e2e)', () => {
         update: jest.fn(),
       },
       conversationTurn: {
+        create: jest.fn(),
         findMany: jest.fn(),
       },
       onModuleInit: jest.fn(),
       onModuleDestroy: jest.fn(),
+    };
+    openAiService = {
+      transcribeAudio: jest.fn(),
+      generateAssistantText: jest.fn(),
+      synthesizeSpeech: jest.fn(),
     };
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
@@ -42,6 +55,8 @@ describe('AppController (e2e)', () => {
     })
       .overrideProvider(PrismaService)
       .useValue(prisma)
+      .overrideProvider(OpenAiService)
+      .useValue(openAiService)
       .compile();
 
     app = moduleFixture.createNestApplication();
@@ -141,6 +156,52 @@ describe('AppController (e2e)', () => {
             createdAt: '2026-05-16T05:00:00.000Z',
           },
         ],
+      });
+  });
+
+  it('/call-sessions/:id/turns/audio (POST)', () => {
+    prisma.callSession.findUnique.mockResolvedValue({
+      id: 'session-1',
+      status: 'ACTIVE',
+      startedAt,
+      endedAt: null,
+      expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+    });
+    openAiService.transcribeAudio.mockResolvedValue('오늘 산책을 했어요.');
+    prisma.conversationTurn.create.mockResolvedValue({});
+    prisma.conversationTurn.findMany.mockResolvedValue([
+      {
+        id: 'turn-1',
+        callSessionId: 'session-1',
+        role: 'USER',
+        text: '오늘 산책을 했어요.',
+        failed: false,
+        riskFlag: false,
+        riskType: null,
+        createdAt: startedAt,
+      },
+    ]);
+    openAiService.generateAssistantText.mockResolvedValue(
+      '산책을 다녀오셨군요.',
+    );
+    openAiService.synthesizeSpeech.mockResolvedValue(Buffer.from('mp3'));
+
+    return request(app.getHttpServer())
+      .post('/call-sessions/session-1/turns/audio')
+      .attach('audio', Buffer.from('audio'), {
+        filename: 'turn.m4a',
+        contentType: 'audio/mp4',
+      })
+      .expect(200)
+      .expect({
+        callSessionId: 'session-1',
+        userText: '오늘 산책을 했어요.',
+        assistantText: '산책을 다녀오셨군요.',
+        audioMimeType: 'audio/mpeg',
+        audioBase64: Buffer.from('mp3').toString('base64'),
+        failed: false,
+        riskFlag: false,
+        riskType: null,
       });
   });
 
