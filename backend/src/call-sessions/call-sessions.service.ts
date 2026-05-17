@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { CallSessionStatus, ConversationRole } from '@prisma/client';
 import type { CallSession, ConversationTurn } from '@prisma/client';
+import { DemoLoggerService } from '../common/demo-logger.service';
 import { OpenAiService } from '../openai/openai.service';
 import type { AssistantMessage } from '../openai/openai.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -50,6 +51,7 @@ export class CallSessionsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly openAiService: OpenAiService,
+    private readonly demoLogger: DemoLoggerService,
   ) {}
 
   async create(): Promise<CallSessionResponseDto> {
@@ -62,6 +64,8 @@ export class CallSessionsService {
         expiresAt,
       },
     });
+
+    this.demoLogger.callSessionCreated(session.id, session.expiresAt);
 
     return this.toCallSessionResponse(session);
   }
@@ -113,6 +117,12 @@ export class CallSessionsService {
     }
 
     this.validateAudioUpload(audio);
+    this.demoLogger.voiceTurnStarted(
+      id,
+      audio.originalname || 'turn.m4a',
+      audio.mimetype,
+      audio.size ?? audio.buffer.length,
+    );
 
     const userText = await this.transcribeAudio(audio);
     const riskType = this.detectRiskType(userText);
@@ -120,9 +130,13 @@ export class CallSessionsService {
 
     if (riskFlag) {
       this.logger.warn(
-        `Risk speech detected: callSessionId=${id} riskType=${riskType} text="${userText}"`,
+        `Risk speech detected: callSessionId=${id} riskType=${riskType}`,
       );
     }
+    this.demoLogger.userTextTranscribed(id, userText, {
+      riskFlag,
+      riskType,
+    });
 
     await this.prisma.conversationTurn.create({
       data: {
@@ -141,6 +155,7 @@ export class CallSessionsService {
         await this.openAiService.generateAssistantText(messages);
       const assistantAudio =
         await this.openAiService.synthesizeSpeech(assistantText);
+      this.demoLogger.assistantTextGenerated(id, assistantText, false);
 
       await this.prisma.conversationTurn.create({
         data: {
@@ -164,6 +179,12 @@ export class CallSessionsService {
       this.logger.error(
         `Assistant response generation failed: callSessionId=${id}`,
         error instanceof Error ? error.stack : undefined,
+      );
+      this.demoLogger.assistantGenerationFailed(id, error);
+      this.demoLogger.assistantTextGenerated(
+        id,
+        ASSISTANT_FAILURE_MESSAGE,
+        true,
       );
 
       await this.prisma.conversationTurn.create({
@@ -208,6 +229,8 @@ export class CallSessionsService {
         endedAt: new Date(),
       },
     });
+
+    this.demoLogger.callSessionEnded(endedSession.id, endedSession.endedAt);
 
     return this.toCallSessionResponse(endedSession);
   }

@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { CallSessionStatus, ConversationRole } from '@prisma/client';
+import { DemoLoggerService } from '../common/demo-logger.service';
 import { OpenAiService } from '../openai/openai.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CallSessionsService } from './call-sessions.service';
@@ -31,6 +32,14 @@ describe('CallSessionsService', () => {
     generateAssistantText: jest.Mock;
     synthesizeSpeech: jest.Mock;
   };
+  let demoLogger: {
+    callSessionCreated: jest.Mock;
+    callSessionEnded: jest.Mock;
+    voiceTurnStarted: jest.Mock;
+    userTextTranscribed: jest.Mock;
+    assistantTextGenerated: jest.Mock;
+    assistantGenerationFailed: jest.Mock;
+  };
 
   beforeEach(() => {
     jest.useFakeTimers();
@@ -54,10 +63,19 @@ describe('CallSessionsService', () => {
       generateAssistantText: jest.fn(),
       synthesizeSpeech: jest.fn(),
     };
+    demoLogger = {
+      callSessionCreated: jest.fn(),
+      callSessionEnded: jest.fn(),
+      voiceTurnStarted: jest.fn(),
+      userTextTranscribed: jest.fn(),
+      assistantTextGenerated: jest.fn(),
+      assistantGenerationFailed: jest.fn(),
+    };
 
     service = new CallSessionsService(
       prisma as unknown as PrismaService,
       openAiService as unknown as OpenAiService,
+      demoLogger as unknown as DemoLoggerService,
     );
   });
 
@@ -88,6 +106,10 @@ describe('CallSessionsService', () => {
         expiresAt,
       },
     });
+    expect(demoLogger.callSessionCreated).toHaveBeenCalledWith(
+      'session-1',
+      expiresAt,
+    );
   });
 
   it('returns an existing call session', async () => {
@@ -208,6 +230,25 @@ describe('CallSessionsService', () => {
         content: '오늘 산책을 했어요.',
       },
     ]);
+    expect(demoLogger.voiceTurnStarted).toHaveBeenCalledWith(
+      'session-1',
+      'turn.m4a',
+      'audio/mp4',
+      audio.buffer.length,
+    );
+    expect(demoLogger.userTextTranscribed).toHaveBeenCalledWith(
+      'session-1',
+      '오늘 산책을 했어요.',
+      {
+        riskFlag: false,
+        riskType: null,
+      },
+    );
+    expect(demoLogger.assistantTextGenerated).toHaveBeenCalledWith(
+      'session-1',
+      '산책을 다녀오셨군요. 기분이 조금 가벼워지셨나요?',
+      false,
+    );
   });
 
   it('stores risk metadata when processing risky speech', async () => {
@@ -280,6 +321,15 @@ describe('CallSessionsService', () => {
         riskFlag: false,
         riskType: null,
       },
+    );
+    expect(demoLogger.assistantGenerationFailed).toHaveBeenCalledWith(
+      'session-1',
+      expect.any(Error),
+    );
+    expect(demoLogger.assistantTextGenerated).toHaveBeenCalledWith(
+      'session-1',
+      '응답을 만드는 중 문제가 생겼어요. 잠시 후 다시 말해 주세요.',
+      true,
     );
   });
 
@@ -368,6 +418,7 @@ describe('CallSessionsService', () => {
         endedAt: now,
       },
     });
+    expect(demoLogger.callSessionEnded).toHaveBeenCalledWith('session-1', now);
   });
 
   it('throws conflict when ending an already ended call session', async () => {
