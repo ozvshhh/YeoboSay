@@ -96,21 +96,29 @@ fun CallRoute(
 ) {
     val state by viewModel.uiState.collectAsState()
     val context = LocalContext.current
+    var pendingAudioPermissionAction by remember { mutableStateOf<(() -> Unit)?>(null) }
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission(),
     ) { granted ->
-        if (granted) viewModel.toggleRecording()
+        val action = pendingAudioPermissionAction
+        pendingAudioPermissionAction = null
+        if (granted) {
+            action?.invoke()
+        } else {
+            viewModel.onAudioPermissionDenied()
+        }
     }
 
-    val toggleRecordingWithPermission = {
+    fun runWithAudioPermission(action: () -> Unit) {
         val isGranted = ContextCompat.checkSelfPermission(
             context,
             Manifest.permission.RECORD_AUDIO,
         ) == PackageManager.PERMISSION_GRANTED
 
         if (isGranted) {
-            viewModel.toggleRecording()
+            action()
         } else {
+            pendingAudioPermissionAction = action
             permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
     }
@@ -119,9 +127,9 @@ fun CallRoute(
         state = state,
         onStartSession = viewModel::startSession,
         onRequestTestCall = viewModel::requestTestCall,
-        onAcceptIncomingCall = viewModel::acceptIncomingCall,
+        onAcceptIncomingCall = { runWithAudioPermission(viewModel::acceptIncomingCall) },
         onDeclineIncomingCall = viewModel::declineIncomingCall,
-        onToggleRecording = toggleRecordingWithPermission,
+        onToggleRecording = { runWithAudioPermission(viewModel::toggleRecording) },
         onStopPlayback = viewModel::stopPlayback,
         onEndSession = viewModel::endSession,
         onAcceptButtonSizeChange = viewModel::setAcceptButtonSize,
@@ -618,6 +626,13 @@ private fun ActiveCallScreen(
                 isPlaying = state.isPlaying,
                 isAutoConversation = state.isAutoConversation,
                 isEndingSession = state.isEndingSession,
+                isListening = state.isListening,
+                isUserSpeaking = state.isUserSpeaking,
+                speechDebugStatus = state.speechDebugStatus,
+                speechRms = state.speechRms,
+                speechThreshold = state.speechThreshold,
+                speechNoiseFloor = state.speechNoiseFloor,
+                lastSpeechDurationMs = state.lastSpeechDurationMs,
                 onToggleSpeaker = { isSpeakerOn = !isSpeakerOn },
                 onToggleRecording = onToggleRecording,
                 onStopPlayback = onStopPlayback,
@@ -711,6 +726,13 @@ private fun ActiveCallControls(
     isPlaying: Boolean,
     isAutoConversation: Boolean,
     isEndingSession: Boolean,
+    isListening: Boolean,
+    isUserSpeaking: Boolean,
+    speechDebugStatus: String,
+    speechRms: Double,
+    speechThreshold: Double,
+    speechNoiseFloor: Double,
+    lastSpeechDurationMs: Long?,
     onToggleSpeaker: () -> Unit,
     onToggleRecording: () -> Unit,
     onStopPlayback: () -> Unit,
@@ -750,6 +772,8 @@ private fun ActiveCallControls(
                 isRecording -> "말씀을 듣고 있어요."
                 isUploading -> "답변을 준비하고 있어요."
                 isAutoConversation && isPlaying -> "AI가 먼저 인사하고 있어요."
+                isAutoConversation && isUserSpeaking -> "말씀하고 계신 것을 감지했어요."
+                isAutoConversation && isListening -> "말씀을 듣고 있어요."
                 isAutoConversation -> "말씀하시면 자동으로 들을 준비를 할게요."
                 else -> "녹음 버튼을 눌러 말씀해 주세요."
             },
@@ -759,6 +783,16 @@ private fun ActiveCallControls(
             fontWeight = FontWeight.SemiBold,
             textAlign = TextAlign.Center,
         )
+
+        if (isAutoConversation) {
+            SpeechDetectionDebugPanel(
+                status = speechDebugStatus,
+                rms = speechRms,
+                threshold = speechThreshold,
+                noiseFloor = speechNoiseFloor,
+                lastSpeechDurationMs = lastSpeechDurationMs,
+            )
+        }
 
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -783,6 +817,9 @@ private fun ActiveCallControls(
             ControlButton(
                 icon = if (isRecording) Icons.Filled.Stop else Icons.Filled.Mic,
                 label = when {
+                    isAutoConversation && isUserSpeaking -> "감지 중"
+                    isAutoConversation && isListening -> "대기 중"
+                    isAutoConversation -> "자동"
                     isRecording -> "녹음 종료"
                     isUploading -> "업로드 중"
                     else -> "녹음"
@@ -790,8 +827,51 @@ private fun ActiveCallControls(
                 selected = false,
                 circleBrush = if (isRecording) Brush.verticalGradient(listOf(CallRedLight, CallRedDeep)) else null,
                 contentColor = if (isRecording) Color.White else OneUiInk.copy(alpha = 0.80f),
-                enabled = !isUploading && !isEndingSession,
+                enabled = !isAutoConversation && !isUploading && !isEndingSession,
                 onClick = onToggleRecording,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SpeechDetectionDebugPanel(
+    status: String,
+    rms: Double,
+    threshold: Double,
+    noiseFloor: Double,
+    lastSpeechDurationMs: Long?,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(Color(0xFFF5F6FA))
+            .border(1.dp, OneUiLine, RoundedCornerShape(18.dp))
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        Text(
+            text = "디버그 감지 상태: $status",
+            color = OneUiInk.copy(alpha = 0.72f),
+            fontSize = 16.sp,
+            lineHeight = 21.sp,
+            fontWeight = FontWeight.ExtraBold,
+        )
+        Text(
+            text = "RMS ${formatAudioMetric(rms)} / 기준 ${formatAudioMetric(threshold)} / 소음 ${formatAudioMetric(noiseFloor)}",
+            color = OneUiInk.copy(alpha = 0.56f),
+            fontSize = 15.sp,
+            lineHeight = 20.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+        lastSpeechDurationMs?.let { durationMs ->
+            Text(
+                text = "마지막 발화 ${durationMs}ms",
+                color = OneUiInk.copy(alpha = 0.56f),
+                fontSize = 15.sp,
+                lineHeight = 20.sp,
+                fontWeight = FontWeight.SemiBold,
             )
         }
     }
@@ -976,6 +1056,9 @@ private fun formatElapsed(seconds: Long): String {
     val secondsPart = seconds % 60
     return String.format(Locale.getDefault(), "%02d:%02d", minutesPart, secondsPart)
 }
+
+private fun formatAudioMetric(value: Double): String =
+    String.format(Locale.getDefault(), "%.3f", value)
 
 @Preview(showBackground = true)
 @Composable

@@ -10,6 +10,9 @@ import com.yeobosay.app.data.IncomingCallEvent
 import com.yeobosay.app.data.YeoboSayApi
 import com.yeobosay.app.voice.AudioPlayer
 import com.yeobosay.app.voice.AudioRecorder
+import com.yeobosay.app.voice.SpeechDetectionListener
+import com.yeobosay.app.voice.SpeechDetectionSnapshot
+import com.yeobosay.app.voice.SpeechRmsDetector
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -56,6 +59,13 @@ data class CallUiState(
     val isRecording: Boolean = false,
     val isUploading: Boolean = false,
     val isPlaying: Boolean = false,
+    val isListening: Boolean = false,
+    val isUserSpeaking: Boolean = false,
+    val speechDebugStatus: String = "IDLE",
+    val speechRms: Double = 0.0,
+    val speechThreshold: Double = 0.0,
+    val speechNoiseFloor: Double = 0.0,
+    val lastSpeechDurationMs: Long? = null,
     val statusText: String = "통화 세션을 시작해 주세요.",
     val socketStatusText: String = "전화 수신 서버에 연결 중입니다.",
     val errorText: String? = null,
@@ -73,6 +83,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
     private val invitationSocket = CallInvitationSocket()
     private val recorder = AudioRecorder(application.applicationContext)
     private val player = AudioPlayer(application.applicationContext)
+    private val speechDetector = SpeechRmsDetector(application.applicationContext)
 
     private val _uiState = MutableStateFlow(CallUiState())
     val uiState: StateFlow<CallUiState> = _uiState.asStateFlow()
@@ -95,6 +106,16 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             createCallSession()
+        }
+    }
+
+    fun onAudioPermissionDenied() {
+        _uiState.update {
+            it.copy(
+                statusText = "마이크 권한이 필요합니다.",
+                errorText = "통화를 위해 마이크 권한을 허용해 주세요.",
+                speechDebugStatus = "PERMISSION_DENIED",
+            )
         }
     }
 
@@ -246,6 +267,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
             maxRecordingJob?.cancel()
             maxRecordingJob = null
             if (_uiState.value.isRecording) recorder.cancel()
+            stopAutoSpeechDetection()
             player.stop()
 
             _uiState.update {
@@ -269,6 +291,9 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                             callElapsedSeconds = 0L,
                             isAutoConversation = false,
                             isEndingSession = false,
+                            isListening = false,
+                            isUserSpeaking = false,
+                            speechDebugStatus = "IDLE",
                             statusText = "통화가 종료되었습니다.",
                         )
                     }
@@ -294,6 +319,10 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
             it.copy(
                 isStartingSession = true,
                 errorText = null,
+                isListening = false,
+                isUserSpeaking = false,
+                speechDebugStatus = "STARTING_SESSION",
+                lastSpeechDurationMs = null,
                 statusText = "세션을 만드는 중입니다.",
             )
         }
@@ -327,6 +356,9 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                             "녹음 버튼을 눌러 대화를 시작하세요."
                         },
                         isPlaying = isAutoConversation,
+                        isListening = false,
+                        isUserSpeaking = false,
+                        speechDebugStatus = if (isAutoConversation) "AI_GREETING" else "MANUAL_READY",
                         messages = listOf(
                             CallMessage(
                                 role = MessageRole.Assistant,
@@ -378,6 +410,9 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.update {
                 it.copy(
                     isPlaying = false,
+                    isListening = false,
+                    isUserSpeaking = false,
+                    speechDebugStatus = "GREETING_AUDIO_MISSING",
                     statusText = "첫 인사 음성을 받을 수 없습니다.",
                     errorText = "서버 첫 인사 음성이 없어 재생하지 않았습니다.",
                 )
@@ -392,9 +427,97 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                     statusText = "말씀을 듣고 있어요.",
                 )
             }
+            startAutoSpeechDetection()
         }
 
         player.playBase64Mp3(serverAudioBase64, onComplete)
+    }
+
+    private fun startAutoSpeechDetection() {
+        val state = _uiState.value
+        if (!state.isAutoConversation || state.callSessionId == null || speechDetector.isRunning) {
+            return
+        }
+
+        _uiState.update {
+            it.copy(
+                isListening = true,
+                isUserSpeaking = false,
+                speechDebugStatus = "LISTENING",
+                statusText = "말씀을 듣고 있어요.",
+                errorText = null,
+            )
+        }
+
+        speechDetector.start(
+            object : SpeechDetectionListener {
+                override fun onListening(snapshot: SpeechDetectionSnapshot) {
+                    updateSpeechDetection(
+                        status = if (snapshot.isSpeaking) "USER_SPEAKING" else "LISTENING",
+                        snapshot = snapshot,
+                    )
+                }
+
+                override fun onSpeechStarted(snapshot: SpeechDetectionSnapshot) {
+                    updateSpeechDetection(
+                        status = "USER_SPEAKING",
+                        snapshot = snapshot,
+                        statusText = "말씀하고 계신 것을 감지했어요.",
+                    )
+                }
+
+                override fun onSpeechEnded(durationMs: Long, snapshot: SpeechDetectionSnapshot) {
+                    updateSpeechDetection(
+                        status = "SPEECH_ENDED",
+                        snapshot = snapshot,
+                        durationMs = durationMs,
+                        statusText = "말씀을 마친 것으로 감지했어요.",
+                    )
+                }
+
+                override fun onError(message: String) {
+                    _uiState.update {
+                        it.copy(
+                            isListening = false,
+                            isUserSpeaking = false,
+                            speechDebugStatus = "ERROR",
+                            statusText = "음성 감지 실패",
+                            errorText = message,
+                        )
+                    }
+                }
+            },
+        )
+    }
+
+    private fun stopAutoSpeechDetection() {
+        speechDetector.stop()
+        _uiState.update {
+            it.copy(
+                isListening = false,
+                isUserSpeaking = false,
+            )
+        }
+    }
+
+    private fun updateSpeechDetection(
+        status: String,
+        snapshot: SpeechDetectionSnapshot,
+        durationMs: Long? = null,
+        statusText: String? = null,
+    ) {
+        _uiState.update {
+            it.copy(
+                isListening = status != "ERROR",
+                isUserSpeaking = snapshot.isSpeaking,
+                speechDebugStatus = status,
+                speechRms = snapshot.rms,
+                speechThreshold = snapshot.threshold,
+                speechNoiseFloor = snapshot.noiseFloor,
+                lastSpeechDurationMs = durationMs ?: it.lastSpeechDurationMs,
+                statusText = statusText ?: it.statusText,
+            )
+        }
     }
 
     fun toggleRecording() {
@@ -409,6 +532,10 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
         val sessionId = _uiState.value.callSessionId
         if (sessionId == null) {
             _uiState.update { it.copy(errorText = "먼저 통화 세션을 시작해 주세요.") }
+            return
+        }
+        if (_uiState.value.isAutoConversation) {
+            _uiState.update { it.copy(errorText = "자동 통화 중에는 녹음 버튼을 누르지 않아도 됩니다.") }
             return
         }
         if (_uiState.value.isUploading) return
@@ -519,13 +646,16 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
 
     fun stopPlayback() {
         player.stop()
+        val shouldListen = _uiState.value.isAutoConversation && _uiState.value.callSessionId != null
         _uiState.update { it.copy(isPlaying = false, statusText = "재생을 중지했습니다.") }
+        if (shouldListen) startAutoSpeechDetection()
     }
 
     override fun onCleared() {
         invitationSocket.disconnect()
         callTimerJob?.cancel()
         maxRecordingJob?.cancel()
+        speechDetector.release()
         recorder.cancel()
         player.stop()
         super.onCleared()
