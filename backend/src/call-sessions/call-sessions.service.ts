@@ -23,6 +23,8 @@ import {
   CallSessionResponseDto,
   ConversationPolicyResponseDto,
 } from './call-session-response.dto';
+import { AutoAudioTurnUploadDto } from './auto-audio-turn-upload.dto';
+import { AutoTurnResponseDto } from './auto-turn-response.dto';
 import {
   ConversationTurnListResponseDto,
   ConversationTurnResponseDto,
@@ -41,6 +43,9 @@ const AUTO_CONVERSATION_FIRST_GREETING =
 const AUTO_CONVERSATION_NO_RESPONSE_PROMPT = '여보세요? 제 말 들리세요?';
 const AUTO_CONVERSATION_MAX_DURATION_CLOSING =
   '어르신 아쉽지만 오늘 통화는 여기까지에요.';
+const AUTO_TURN_MOCK_USER_TEXT = '자동 통화 음성 업로드를 받았어요.';
+const AUTO_TURN_MOCK_ASSISTANT_TEXT =
+  '좋아요. 자동 통화 응답 흐름이 연결되었어요. 다음 단계에서 실제 음성 인식을 붙일게요.';
 
 const AUTO_AUDIO_POLICY: AudioPolicyResponseDto = {
   silenceTimeoutMs: 3000,
@@ -259,6 +264,100 @@ export class CallSessionsService {
         riskType,
       };
     }
+  }
+
+  async processAutoAudioTurn(
+    id: string,
+    dto: AutoAudioTurnUploadDto,
+    audio?: Express.Multer.File,
+  ): Promise<AutoTurnResponseDto> {
+    const session = await this.prisma.callSession.findUnique({
+      where: { id },
+    });
+
+    if (!session) {
+      throw new NotFoundException('Call session not found.');
+    }
+
+    if (session.mode !== CallSessionMode.AUTO_CONVERSATION) {
+      throw new ConflictException(
+        'Auto audio turns require an auto conversation session.',
+      );
+    }
+
+    if (session.status === CallSessionStatus.ENDED) {
+      throw new ConflictException('Call session is already ended.');
+    }
+
+    if (session.expiresAt.getTime() <= Date.now()) {
+      throw new ConflictException('Call session is expired.');
+    }
+
+    this.validateAudioUpload(audio);
+    this.demoLogger.voiceTurnStarted(
+      id,
+      audio.originalname || 'turn.m4a',
+      audio.mimetype,
+      audio.size ?? audio.buffer.length,
+    );
+
+    const bargeIn = dto.bargeIn === 'true';
+
+    await this.prisma.conversationTurn.create({
+      data: {
+        callSessionId: id,
+        clientTurnId: dto.clientTurnId,
+        role: ConversationRole.USER,
+        text: AUTO_TURN_MOCK_USER_TEXT,
+        status: ConversationTurnStatus.COMPLETED,
+        conversationStep: session.currentStep,
+        bargeIn,
+        completedAt: new Date(),
+      },
+    });
+
+    await this.prisma.conversationTurn.create({
+      data: {
+        callSessionId: id,
+        role: ConversationRole.ASSISTANT,
+        text: AUTO_TURN_MOCK_ASSISTANT_TEXT,
+        status: ConversationTurnStatus.COMPLETED,
+        conversationStep: session.currentStep,
+        completedAt: new Date(),
+      },
+    });
+
+    await this.prisma.callSession.update({
+      where: { id },
+      data: {
+        status: CallSessionStatus.WAITING_FOR_USER,
+        turnCount: { increment: 1 },
+      },
+    });
+
+    this.demoLogger.userTextTranscribed(id, AUTO_TURN_MOCK_USER_TEXT, {
+      riskFlag: false,
+      riskType: null,
+    });
+    this.demoLogger.assistantTextGenerated(
+      id,
+      AUTO_TURN_MOCK_ASSISTANT_TEXT,
+      false,
+    );
+
+    return {
+      callSessionId: id,
+      clientTurnId: dto.clientTurnId,
+      userText: AUTO_TURN_MOCK_USER_TEXT,
+      assistantText: AUTO_TURN_MOCK_ASSISTANT_TEXT,
+      audioMimeType: null,
+      audioBase64: null,
+      nextAction: 'play_audio',
+      turnStatus: 'completed',
+      failed: false,
+      riskFlag: false,
+      riskType: null,
+    };
   }
 
   async end(id: string): Promise<CallSessionResponseDto> {

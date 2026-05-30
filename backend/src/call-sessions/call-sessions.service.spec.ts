@@ -396,6 +396,101 @@ describe('CallSessionsService', () => {
     );
   });
 
+  it('processes an auto audio turn with a mock assistant response', async () => {
+    const audio = {
+      buffer: Buffer.from('audio'),
+      mimetype: 'audio/mp4',
+      originalname: 'auto-turn.m4a',
+    } as Express.Multer.File;
+    const completedAt = new Date('2026-05-16T05:00:01.000Z');
+    jest.setSystemTime(completedAt);
+
+    prisma.callSession.findUnique.mockResolvedValue({
+      ...baseSession,
+      mode: CallSessionMode.AUTO_CONVERSATION,
+      currentStep: ConversationStep.WELLBEING,
+    });
+    prisma.conversationTurn.create.mockResolvedValue({});
+    prisma.callSession.update.mockResolvedValue({
+      ...baseSession,
+      mode: CallSessionMode.AUTO_CONVERSATION,
+      status: CallSessionStatus.WAITING_FOR_USER,
+      turnCount: 1,
+    });
+
+    await expect(
+      service.processAutoAudioTurn(
+        'session-1',
+        {
+          clientTurnId: 'android-turn-1',
+          bargeIn: 'true',
+        },
+        audio,
+      ),
+    ).resolves.toEqual({
+      callSessionId: 'session-1',
+      clientTurnId: 'android-turn-1',
+      userText: '자동 통화 음성 업로드를 받았어요.',
+      assistantText:
+        '좋아요. 자동 통화 응답 흐름이 연결되었어요. 다음 단계에서 실제 음성 인식을 붙일게요.',
+      audioMimeType: null,
+      audioBase64: null,
+      nextAction: 'play_audio',
+      turnStatus: 'completed',
+      failed: false,
+      riskFlag: false,
+      riskType: null,
+    });
+    expect(prisma.conversationTurn.create).toHaveBeenNthCalledWith(1, {
+      data: {
+        callSessionId: 'session-1',
+        clientTurnId: 'android-turn-1',
+        role: ConversationRole.USER,
+        text: '자동 통화 음성 업로드를 받았어요.',
+        status: ConversationTurnStatus.COMPLETED,
+        conversationStep: ConversationStep.WELLBEING,
+        bargeIn: true,
+        completedAt,
+      },
+    });
+    expect(prisma.conversationTurn.create).toHaveBeenNthCalledWith(2, {
+      data: {
+        callSessionId: 'session-1',
+        role: ConversationRole.ASSISTANT,
+        text: '좋아요. 자동 통화 응답 흐름이 연결되었어요. 다음 단계에서 실제 음성 인식을 붙일게요.',
+        status: ConversationTurnStatus.COMPLETED,
+        conversationStep: ConversationStep.WELLBEING,
+        completedAt,
+      },
+    });
+    expect(prisma.callSession.update).toHaveBeenCalledWith({
+      where: { id: 'session-1' },
+      data: {
+        status: CallSessionStatus.WAITING_FOR_USER,
+        turnCount: { increment: 1 },
+      },
+    });
+    expect(openAiService.transcribeAudio).not.toHaveBeenCalled();
+    expect(openAiService.generateAssistantText).not.toHaveBeenCalled();
+    expect(openAiService.synthesizeSpeech).not.toHaveBeenCalled();
+  });
+
+  it('rejects auto audio turns for manual call sessions', async () => {
+    prisma.callSession.findUnique.mockResolvedValue(baseSession);
+
+    await expect(
+      service.processAutoAudioTurn(
+        'session-1',
+        { clientTurnId: 'android-turn-1' },
+        {
+          buffer: Buffer.from('audio'),
+          mimetype: 'audio/mp4',
+          originalname: 'auto-turn.m4a',
+        } as Express.Multer.File,
+      ),
+    ).rejects.toBeInstanceOf(ConflictException);
+  });
+
   it('throws bad request for non-M4A audio uploads', async () => {
     prisma.callSession.findUnique.mockResolvedValue({
       id: 'session-1',
