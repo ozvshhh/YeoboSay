@@ -65,6 +65,7 @@ data class CallUiState(
     val speechRms: Double = 0.0,
     val speechThreshold: Double = 0.0,
     val speechNoiseFloor: Double = 0.0,
+    val speechAudioSource: String = "-",
     val lastSpeechDurationMs: Long? = null,
     val statusText: String = "통화 세션을 시작해 주세요.",
     val socketStatusText: String = "전화 수신 서버에 연결 중입니다.",
@@ -514,6 +515,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                 speechRms = snapshot.rms,
                 speechThreshold = snapshot.threshold,
                 speechNoiseFloor = snapshot.noiseFloor,
+                speechAudioSource = snapshot.audioSourceName,
                 lastSpeechDurationMs = durationMs ?: it.lastSpeechDurationMs,
                 statusText = statusText ?: it.statusText,
             )

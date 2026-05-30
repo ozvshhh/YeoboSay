@@ -1,6 +1,7 @@
 package com.yeobosay.app.voice
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
 import android.media.AudioFormat
@@ -32,6 +33,7 @@ data class SpeechDetectionSnapshot(
     val threshold: Double,
     val noiseFloor: Double,
     val isSpeaking: Boolean,
+    val audioSourceName: String,
 )
 
 interface SpeechDetectionListener {
@@ -87,28 +89,17 @@ class SpeechRmsDetector(
         }
 
         val bufferSize = max(minBufferSize, config.sampleRateHz / 5)
-        val record = try {
-            AudioRecord(
-                MediaRecorder.AudioSource.VOICE_RECOGNITION,
-                config.sampleRateHz,
-                AudioFormat.CHANNEL_IN_MONO,
-                AudioFormat.ENCODING_PCM_16BIT,
-                bufferSize,
-            )
-        } catch (error: RuntimeException) {
-            listener.onError(error.message ?: "마이크를 열 수 없습니다.")
-            return
-        }
-
-        if (record.state != AudioRecord.STATE_INITIALIZED) {
-            record.release()
+        val recordingSource = createRecorder(bufferSize)
+        if (recordingSource == null) {
             listener.onError("마이크를 초기화할 수 없습니다.")
             return
         }
 
+        val record = recordingSource.record
+
         audioRecord = record
         detectJob = scope.launch {
-            runDetectionLoop(record, bufferSize, listener)
+            runDetectionLoop(recordingSource, bufferSize, listener)
         }
     }
 
@@ -124,10 +115,11 @@ class SpeechRmsDetector(
     }
 
     private suspend fun runDetectionLoop(
-        record: AudioRecord,
+        recordingSource: RecordingSource,
         bufferSize: Int,
         listener: SpeechDetectionListener,
     ) {
+        val record = recordingSource.record
         val buffer = ShortArray(bufferSize)
         var isSpeaking = false
         var speechStartedAt = 0L
@@ -154,6 +146,7 @@ class SpeechRmsDetector(
                     threshold = threshold,
                     noiseFloor = noiseFloor,
                     isSpeaking = isSpeaking,
+                    audioSourceName = recordingSource.name,
                 )
 
                 if (hasVoice) {
@@ -200,4 +193,37 @@ class SpeechRmsDetector(
         runCatching { record.stop() }
         record.release()
     }
+
+    @SuppressLint("MissingPermission")
+    private fun createRecorder(bufferSize: Int): RecordingSource? {
+        val candidates = listOf(
+            MediaRecorder.AudioSource.MIC to "MIC",
+            MediaRecorder.AudioSource.VOICE_RECOGNITION to "VOICE_RECOGNITION",
+        )
+
+        for ((source, name) in candidates) {
+            val record = runCatching {
+                AudioRecord(
+                    source,
+                    config.sampleRateHz,
+                    AudioFormat.CHANNEL_IN_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT,
+                    bufferSize,
+                )
+            }.getOrNull() ?: continue
+
+            if (record.state == AudioRecord.STATE_INITIALIZED) {
+                return RecordingSource(record = record, name = name)
+            }
+
+            record.release()
+        }
+
+        return null
+    }
+
+    private data class RecordingSource(
+        val record: AudioRecord,
+        val name: String,
+    )
 }
