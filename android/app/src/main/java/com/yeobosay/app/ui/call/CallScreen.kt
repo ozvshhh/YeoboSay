@@ -632,6 +632,7 @@ private fun ActiveCallScreen(
                 speechRms = state.speechRms,
                 speechThreshold = state.speechThreshold,
                 speechNoiseFloor = state.speechNoiseFloor,
+                speechAudioSource = state.speechAudioSource,
                 lastSpeechDurationMs = state.lastSpeechDurationMs,
                 onToggleSpeaker = { isSpeakerOn = !isSpeakerOn },
                 onToggleRecording = onToggleRecording,
@@ -732,6 +733,7 @@ private fun ActiveCallControls(
     speechRms: Double,
     speechThreshold: Double,
     speechNoiseFloor: Double,
+    speechAudioSource: String,
     lastSpeechDurationMs: Long?,
     onToggleSpeaker: () -> Unit,
     onToggleRecording: () -> Unit,
@@ -790,6 +792,7 @@ private fun ActiveCallControls(
                 rms = speechRms,
                 threshold = speechThreshold,
                 noiseFloor = speechNoiseFloor,
+                audioSource = speechAudioSource,
                 lastSpeechDurationMs = lastSpeechDurationMs,
             )
         }
@@ -840,6 +843,7 @@ private fun SpeechDetectionDebugPanel(
     rms: Double,
     threshold: Double,
     noiseFloor: Double,
+    audioSource: String,
     lastSpeechDurationMs: Long?,
 ) {
     Column(
@@ -859,7 +863,7 @@ private fun SpeechDetectionDebugPanel(
             fontWeight = FontWeight.ExtraBold,
         )
         Text(
-            text = "RMS ${formatAudioMetric(rms)} / 기준 ${formatAudioMetric(threshold)} / 소음 ${formatAudioMetric(noiseFloor)}",
+            text = "소스 $audioSource / RMS ${formatAudioMetric(rms)} / 기준 ${formatAudioMetric(threshold)} / 소음 ${formatAudioMetric(noiseFloor)}",
             color = OneUiInk.copy(alpha = 0.56f),
             fontSize = 15.sp,
             lineHeight = 20.sp,
