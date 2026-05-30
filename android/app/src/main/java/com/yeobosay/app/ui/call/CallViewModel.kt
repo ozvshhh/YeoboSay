@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.yeobosay.app.data.CallInvitationResponse
 import com.yeobosay.app.data.CallInvitationSocket
+import com.yeobosay.app.data.CallSessionMode
 import com.yeobosay.app.data.IncomingCallEvent
 import com.yeobosay.app.data.YeoboSayApi
 import com.yeobosay.app.voice.AudioPlayer
@@ -46,6 +47,7 @@ data class CallUiState(
     val incomingCall: IncomingCallUiState? = null,
     val acceptButtonSize: AcceptButtonSize = AcceptButtonSize.Large,
     val callElapsedSeconds: Long = 0L,
+    val isAutoConversation: Boolean = false,
     val isStartingSession: Boolean = false,
     val isRequestingTestCall: Boolean = false,
     val isAcceptingIncomingCall: Boolean = false,
@@ -152,11 +154,14 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                     _uiState.update {
                         it.copy(
                             incomingCall = null,
-                            isAcceptingIncomingCall = false,
                             statusText = "통화를 연결합니다.",
                         )
                     }
-                    createCallSession()
+                    createCallSession(
+                        mode = CallSessionMode.AutoConversation,
+                        source = "incoming_call",
+                        callInvitationId = incomingCall.callInvitationId,
+                    )
                 }
                 .onFailure { error ->
                     _uiState.update {
@@ -262,6 +267,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                             expiresAt = null,
                             messages = emptyList(),
                             callElapsedSeconds = 0L,
+                            isAutoConversation = false,
                             isEndingSession = false,
                             statusText = "통화가 종료되었습니다.",
                         )
@@ -279,7 +285,11 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private suspend fun createCallSession() {
+    private suspend fun createCallSession(
+        mode: CallSessionMode = CallSessionMode.ManualRecording,
+        source: String? = null,
+        callInvitationId: String? = null,
+    ) {
         _uiState.update {
             it.copy(
                 isStartingSession = true,
@@ -288,21 +298,47 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
 
-        runCatching { api.createCallSession() }
+        runCatching {
+            api.createCallSession(
+                mode = mode,
+                source = source,
+                callInvitationId = callInvitationId,
+            )
+        }
             .onSuccess { session ->
+                val isAutoConversation = session.mode == CallSessionMode.AutoConversation.apiValue
+                val conversationPolicy = session.conversationPolicy
+                val greetingText = conversationPolicy
+                    ?.firstGreetingText
+                    ?.takeIf { it.isNotBlank() }
+                    ?: DEFAULT_GREETING
+
                 startCallTimer()
                 _uiState.update {
                     it.copy(
                         callSessionId = session.id,
                         expiresAt = session.expiresAt,
+                        isAutoConversation = isAutoConversation,
                         isStartingSession = false,
-                        statusText = "녹음 버튼을 눌러 대화를 시작하세요.",
+                        isAcceptingIncomingCall = false,
+                        statusText = if (isAutoConversation) {
+                            "AI가 먼저 인사하고 있어요."
+                        } else {
+                            "녹음 버튼을 눌러 대화를 시작하세요."
+                        },
+                        isPlaying = isAutoConversation,
                         messages = listOf(
                             CallMessage(
                                 role = MessageRole.Assistant,
-                                text = DEFAULT_GREETING,
+                                text = greetingText,
                             ),
                         ),
+                    )
+                }
+
+                if (isAutoConversation) {
+                    playFirstGreeting(
+                        audioBase64 = conversationPolicy?.firstGreetingAudioBase64,
                     )
                 }
             }
@@ -310,6 +346,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update {
                     it.copy(
                         isStartingSession = false,
+                        isAcceptingIncomingCall = false,
                         statusText = "세션 생성 실패",
                         errorText = error.message ?: "세션을 만들 수 없습니다.",
                     )
@@ -333,6 +370,31 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
         callTimerJob?.cancel()
         callTimerJob = null
         callStartedAtMillis = 0L
+    }
+
+    private fun playFirstGreeting(audioBase64: String?) {
+        val serverAudioBase64 = audioBase64?.takeIf { it.isNotBlank() }
+        if (serverAudioBase64 == null) {
+            _uiState.update {
+                it.copy(
+                    isPlaying = false,
+                    statusText = "첫 인사 음성을 받을 수 없습니다.",
+                    errorText = "서버 첫 인사 음성이 없어 재생하지 않았습니다.",
+                )
+            }
+            return
+        }
+
+        val onComplete = {
+            _uiState.update {
+                it.copy(
+                    isPlaying = false,
+                    statusText = "말씀을 듣고 있어요.",
+                )
+            }
+        }
+
+        player.playBase64Mp3(serverAudioBase64, onComplete)
     }
 
     fun toggleRecording() {

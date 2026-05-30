@@ -20,6 +20,20 @@ export class ConversationPolicyResponseDto {
   })
   firstGreetingText: string;
 
+  @ApiPropertyOptional({
+    example: 'audio/mpeg',
+    nullable: true,
+    description: 'Server-generated greeting audio MIME type.',
+  })
+  firstGreetingAudioMimeType?: string | null;
+
+  @ApiPropertyOptional({
+    example: 'base64-encoded-mp3',
+    nullable: true,
+    description: 'Server-generated greeting audio encoded as base64.',
+  })
+  firstGreetingAudioBase64?: string | null;
+
   @ApiProperty({ example: '여보세요? 제 말 들리세요?' })
   noResponsePromptText: string;
 

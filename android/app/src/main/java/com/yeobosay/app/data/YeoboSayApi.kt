@@ -34,6 +34,8 @@ data class AudioPolicyResponse(
 
 data class ConversationPolicyResponse(
     val firstGreetingText: String,
+    val firstGreetingAudioMimeType: String?,
+    val firstGreetingAudioBase64: String?,
     val noResponsePromptText: String,
     val maxDurationClosingText: String,
     val targetTurnCount: Int,
@@ -104,7 +106,7 @@ class YeoboSayApi(
                     text = item.getString("text"),
                     failed = item.optBoolean("failed", false),
                     riskFlag = item.optBoolean("riskFlag", false),
-                    riskType = item.optString("riskType").ifBlank { null },
+                    riskType = item.optNullableString("riskType"),
                 )
             }
         }
@@ -157,11 +159,11 @@ class YeoboSayApi(
                 callSessionId = response.getString("callSessionId"),
                 userText = response.optString("userText"),
                 assistantText = response.optString("assistantText"),
-                audioMimeType = response.optString("audioMimeType").ifBlank { null },
-                audioBase64 = response.optString("audioBase64").ifBlank { null },
+                audioMimeType = response.optNullableString("audioMimeType"),
+                audioBase64 = response.optNullableString("audioBase64"),
                 failed = response.optBoolean("failed", false),
                 riskFlag = response.optBoolean("riskFlag", false),
-                riskType = response.optString("riskType").ifBlank { null },
+                riskType = response.optNullableString("riskType"),
             )
         }
 
@@ -173,8 +175,8 @@ class YeoboSayApi(
             message = optString("message", "전화가 왔어요."),
             createdAt = optString("createdAt"),
             expiresAt = optString("expiresAt"),
-            acceptedAt = optString("acceptedAt").ifBlank { null },
-            declinedAt = optString("declinedAt").ifBlank { null },
+            acceptedAt = optNullableString("acceptedAt"),
+            declinedAt = optNullableString("declinedAt"),
         )
 
     private fun JSONObject.toCallSessionResponse(): CallSessionResponse =
@@ -186,9 +188,9 @@ class YeoboSayApi(
             turnCount = optInt("turnCount", 0),
             targetTurnCount = optInt("targetTurnCount", 5),
             riskFlag = optBoolean("riskFlag", false),
-            riskType = optString("riskType").ifBlank { null },
-            startedAt = optString("startedAt").ifBlank { null },
-            endedAt = optString("endedAt").ifBlank { null },
+            riskType = optNullableString("riskType"),
+            startedAt = optNullableString("startedAt"),
+            endedAt = optNullableString("endedAt"),
             expiresAt = getString("expiresAt"),
             audioPolicy = optJSONObject("audioPolicy")?.toAudioPolicyResponse(),
             conversationPolicy = optJSONObject("conversationPolicy")?.toConversationPolicyResponse(),
@@ -205,11 +207,18 @@ class YeoboSayApi(
     private fun JSONObject.toConversationPolicyResponse(): ConversationPolicyResponse =
         ConversationPolicyResponse(
             firstGreetingText = optString("firstGreetingText"),
+            firstGreetingAudioMimeType = optNullableString("firstGreetingAudioMimeType"),
+            firstGreetingAudioBase64 = optNullableString("firstGreetingAudioBase64"),
             noResponsePromptText = optString("noResponsePromptText"),
             maxDurationClosingText = optString("maxDurationClosingText"),
             targetTurnCount = optInt("targetTurnCount", 5),
             maxDurationSeconds = optInt("maxDurationSeconds", 600),
         )
+
+    private fun JSONObject.optNullableString(name: String): String? {
+        if (!has(name) || isNull(name)) return null
+        return optString(name).takeUnless { it.isBlank() || it == "null" }
+    }
 
     private fun requestJson(method: String, path: String, body: JSONObject? = null): JSONObject {
         val connection = openConnection(method, path)

@@ -143,6 +143,7 @@ describe('CallSessionsService', () => {
       currentStep: ConversationStep.GREETING,
     });
     prisma.conversationTurn.create.mockResolvedValue({});
+    openAiService.synthesizeSpeech.mockResolvedValue(Buffer.from('greeting'));
 
     await expect(
       service.create({ mode: 'auto_conversation' }),
@@ -158,6 +159,8 @@ describe('CallSessionsService', () => {
       },
       conversationPolicy: {
         firstGreetingText: '안녕하세요 왕송길 어르신 AI통화 서비스 세요입니다!',
+        firstGreetingAudioMimeType: 'audio/mpeg',
+        firstGreetingAudioBase64: Buffer.from('greeting').toString('base64'),
         noResponsePromptText: '여보세요? 제 말 들리세요?',
         maxDurationClosingText: '어르신 아쉽지만 오늘 통화는 여기까지에요.',
         targetTurnCount: 5,
@@ -183,6 +186,26 @@ describe('CallSessionsService', () => {
         completedAt: now,
       },
     });
+    expect(openAiService.synthesizeSpeech).toHaveBeenCalledWith(
+      '안녕하세요 왕송길 어르신 AI통화 서비스 세요입니다!',
+    );
+  });
+
+  it('fails auto conversation session creation when first greeting audio fails', async () => {
+    prisma.callSession.create.mockResolvedValue({
+      ...baseSession,
+      mode: CallSessionMode.AUTO_CONVERSATION,
+      currentStep: ConversationStep.GREETING,
+    });
+    prisma.conversationTurn.create.mockResolvedValue({});
+    openAiService.synthesizeSpeech.mockRejectedValue(new Error('TTS failed'));
+
+    await expect(
+      service.create({ mode: 'auto_conversation' }),
+    ).rejects.toBeInstanceOf(BadGatewayException);
+    expect(openAiService.synthesizeSpeech).toHaveBeenCalledWith(
+      '안녕하세요 왕송길 어르신 AI통화 서비스 세요입니다!',
+    );
   });
 
   it('returns an existing call session', async () => {
