@@ -24,6 +24,7 @@ import kotlinx.coroutines.launch
 private const val MAX_RECORDING_MILLIS = 30_000L
 private const val MIN_RECORDING_MILLIS = 500L
 private const val DEFAULT_GREETING = "안녕하세요. 저는 YeoboSay 말벗이에요. 오늘은 어떻게 지내셨어요?"
+private const val UI_TEST_APK_MODE = true
 
 data class CallMessage(
     val role: MessageRole,
@@ -48,6 +49,7 @@ data class CallUiState(
     val expiresAt: String? = null,
     val messages: List<CallMessage> = emptyList(),
     val incomingCall: IncomingCallUiState? = null,
+    val showCallSummary: Boolean = false,
     val acceptButtonSize: AcceptButtonSize = AcceptButtonSize.Large,
     val callElapsedSeconds: Long = 0L,
     val isAutoConversation: Boolean = false,
@@ -92,10 +94,20 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
     private var recordingStartedAt: Long = 0L
     private var maxRecordingJob: Job? = null
     private var callTimerJob: Job? = null
+    private var demoConversationJob: Job? = null
     private var callStartedAtMillis: Long = 0L
 
     init {
-        connectCallInvitationSocket()
+        if (UI_TEST_APK_MODE) {
+            _uiState.update {
+                it.copy(
+                    statusText = "UI 테스트 모드입니다.",
+                    socketStatusText = "서버 없이 화면 흐름을 확인할 수 있습니다.",
+                )
+            }
+        } else {
+            connectCallInvitationSocket()
+        }
     }
 
     fun setAcceptButtonSize(size: AcceptButtonSize) {
@@ -123,6 +135,24 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
     fun requestTestCall() {
         val state = _uiState.value
         if (state.isRequestingTestCall || state.incomingCall != null || state.callSessionId != null) {
+            return
+        }
+
+        if (UI_TEST_APK_MODE) {
+            _uiState.update {
+                it.copy(
+                    incomingCall = IncomingCallUiState(
+                        callInvitationId = "ui-test-invitation",
+                        callerName = "여보세요",
+                        message = "AI 안부 전화",
+                        expiresAt = "2026-06-01T09:40:00.000Z",
+                    ),
+                    showCallSummary = false,
+                    statusText = "UI 테스트 전화가 도착했습니다.",
+                    socketStatusText = "UI 테스트 모드",
+                    errorText = null,
+                )
+            }
             return
         }
 
@@ -162,6 +192,11 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
         val incomingCall = _uiState.value.incomingCall ?: return
         if (_uiState.value.isAcceptingIncomingCall) return
 
+        if (UI_TEST_APK_MODE) {
+            startDemoCall(incomingCall.callInvitationId)
+            return
+        }
+
         viewModelScope.launch {
             _uiState.update {
                 it.copy(
@@ -200,6 +235,17 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
     fun declineIncomingCall() {
         val incomingCall = _uiState.value.incomingCall ?: return
         if (_uiState.value.isDecliningIncomingCall) return
+
+        if (UI_TEST_APK_MODE) {
+            _uiState.update {
+                it.copy(
+                    incomingCall = null,
+                    statusText = "테스트 전화를 거절했습니다.",
+                    errorText = null,
+                )
+            }
+            return
+        }
 
         viewModelScope.launch {
             _uiState.update {
@@ -263,6 +309,11 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
     fun endSession() {
         val sessionId = _uiState.value.callSessionId ?: return
         if (_uiState.value.isEndingSession) return
+
+        if (UI_TEST_APK_MODE) {
+            finishDemoCall()
+            return
+        }
 
         viewModelScope.launch {
             maxRecordingJob?.cancel()
@@ -404,6 +455,103 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
         callTimerJob = null
         callStartedAtMillis = 0L
     }
+
+    private fun startDemoCall(callInvitationId: String) {
+        demoConversationJob?.cancel()
+        stopCallTimer()
+        startCallTimer()
+        _uiState.update {
+            it.copy(
+                callSessionId = "ui-test-session-$callInvitationId",
+                expiresAt = null,
+                incomingCall = null,
+                showCallSummary = false,
+                isAutoConversation = true,
+                isAcceptingIncomingCall = false,
+                isListening = true,
+                isUserSpeaking = false,
+                isPlaying = false,
+                speechDebugStatus = "UI_TEST_LISTENING",
+                speechAudioSource = "DEMO",
+                speechRms = 0.024,
+                speechThreshold = 0.018,
+                speechNoiseFloor = 0.006,
+                statusText = "UI 테스트 통화 중입니다.",
+                errorText = null,
+                messages = listOf(
+                    CallMessage(
+                        role = MessageRole.Assistant,
+                        text = "안녕하세요 왕송길 어르신 AI통화 서비스 세요입니다!",
+                    ),
+                ),
+            )
+        }
+        demoConversationJob = viewModelScope.launch {
+            demoMessages().forEach { message ->
+                delay(1_200L)
+                _uiState.update { state ->
+                    if (state.callSessionId == null) state else state.copy(
+                        messages = state.messages + message,
+                        isUserSpeaking = message.role == MessageRole.User,
+                        speechDebugStatus = if (message.role == MessageRole.User) {
+                            "UI_TEST_USER_SPEAKING"
+                        } else {
+                            "UI_TEST_LISTENING"
+                        },
+                    )
+                }
+            }
+            _uiState.update {
+                it.copy(
+                    isUserSpeaking = false,
+                    speechDebugStatus = "UI_TEST_LISTENING",
+                    statusText = "통화 종료 버튼을 누르면 요약 화면을 확인할 수 있습니다.",
+                )
+            }
+        }
+    }
+
+    private fun finishDemoCall() {
+        demoConversationJob?.cancel()
+        demoConversationJob = null
+        stopCallTimer()
+        stopAutoSpeechDetection()
+        player.stop()
+        _uiState.update {
+            it.copy(
+                callSessionId = null,
+                expiresAt = null,
+                incomingCall = null,
+                showCallSummary = true,
+                callElapsedSeconds = 372L,
+                isAutoConversation = false,
+                isStartingSession = false,
+                isRequestingTestCall = false,
+                isAcceptingIncomingCall = false,
+                isDecliningIncomingCall = false,
+                isEndingSession = false,
+                isRecording = false,
+                isUploading = false,
+                isPlaying = false,
+                isListening = false,
+                isUserSpeaking = false,
+                speechDebugStatus = "UI_TEST_ENDED",
+                statusText = "통화 요약을 확인해 주세요.",
+                errorText = null,
+            )
+        }
+    }
+
+    private fun demoMessages(): List<CallMessage> = listOf(
+        CallMessage(MessageRole.User, "어, 여보세요? 응 나야. 잘 있어."),
+        CallMessage(MessageRole.Assistant, "다행이에요. 오늘 아침 식사는 하셨나요?"),
+        CallMessage(MessageRole.User, "응, 밥 먹었어. 날씨 좋아서 창문 열어놨지."),
+        CallMessage(MessageRole.Assistant, "혈압약은 오늘 챙겨 드셨나요? 잊지 않으셨죠?"),
+        CallMessage(MessageRole.User, "아이고, 맞다. 아직 못 먹었네.", riskFlag = true),
+        CallMessage(MessageRole.Assistant, "지금 드시면 돼요. 내일 오후 2시 정형외과 예약도 확인해둘게요."),
+        CallMessage(MessageRole.User, "그래 알았어, 고마워."),
+        CallMessage(MessageRole.Assistant, "네, 어르신. 오늘도 좋은 하루 보내세요. 내일 또 전화드릴게요."),
+    )
 
     private fun playFirstGreeting(audioBase64: String?) {
         val serverAudioBase64 = audioBase64?.takeIf { it.isNotBlank() }
@@ -657,6 +805,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
         invitationSocket.disconnect()
         callTimerJob?.cancel()
         maxRecordingJob?.cancel()
+        demoConversationJob?.cancel()
         speechDetector.release()
         recorder.cancel()
         player.stop()

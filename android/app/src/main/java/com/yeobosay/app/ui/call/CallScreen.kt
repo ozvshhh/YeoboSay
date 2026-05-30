@@ -10,6 +10,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -157,6 +158,10 @@ fun CallScreen(
         ),
     ) {
         when {
+            state.showCallSummary -> CallSummaryScreen(
+                modifier = modifier,
+            )
+
             state.incomingCall != null -> IncomingCallScreen(
                 state = state,
                 incomingCall = state.incomingCall,
@@ -1052,6 +1057,390 @@ private fun ActiveMessageBubble(message: CallMessage) {
                 fontWeight = FontWeight.Medium,
             )
         }
+    }
+}
+
+@Composable
+private fun CallSummaryScreen(
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier.fillMaxSize(),
+        color = Color(0xFFF4F4F6),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .navigationBarsPadding(),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFFFBFBFC))
+                    .padding(horizontal = 24.dp, vertical = 18.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.CallEnd,
+                        contentDescription = null,
+                        tint = CallRedDeep,
+                        modifier = Modifier.size(22.dp),
+                    )
+                    Text(
+                        text = "통화 종료",
+                        color = CallRedDeep,
+                        fontSize = 21.sp,
+                        lineHeight = 28.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                    )
+                }
+                Text(
+                    text = "여보세요",
+                    color = OneUiInk,
+                    fontSize = 48.sp,
+                    lineHeight = 56.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                )
+                Text(
+                    text = "AI 안부 전화 · 6분 12초",
+                    color = OneUiInk.copy(alpha = 0.54f),
+                    fontSize = 22.sp,
+                    lineHeight = 30.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFFFBFBFC))
+                    .padding(horizontal = 24.dp, vertical = 14.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.Top,
+            ) {
+                SummaryActionButton(
+                    icon = Icons.Filled.Call,
+                    label = "다시 전화",
+                    brush = Brush.verticalGradient(listOf(CallGreenLight, CallGreenDeep)),
+                    rotation = -8f,
+                )
+                Spacer(modifier = Modifier.size(18.dp))
+                SummaryActionButton(
+                    icon = Icons.Filled.Mic,
+                    label = "문자 전송",
+                    brush = Brush.verticalGradient(listOf(Color(0xFF4E9AFB), Color(0xFF2268E6))),
+                )
+                Spacer(modifier = Modifier.size(18.dp))
+                SummaryActionButton(
+                    icon = Icons.Filled.Call,
+                    label = "보호자 알림",
+                    brush = Brush.verticalGradient(listOf(Color(0xFF20BDB0), Color(0xFF058B83))),
+                )
+            }
+
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .background(Color(0xFFF4F4F6)),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                item {
+                    UrgentSummaryCard()
+                }
+                item {
+                    TodayStatusCard()
+                }
+                item {
+                    SyncInfoRow()
+                }
+                item {
+                    NextCallCard()
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SummaryActionButton(
+    icon: ImageVector,
+    label: String,
+    brush: Brush,
+    rotation: Float = 0f,
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(62.dp)
+                .shadow(10.dp, CircleShape, ambientColor = Color(0x18000000))
+                .clip(CircleShape)
+                .background(brush)
+                .border(1.dp, Color.White.copy(alpha = 0.70f), CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier
+                    .size(28.dp)
+                    .rotate(rotation),
+            )
+        }
+        Text(
+            text = label,
+            color = OneUiInk.copy(alpha = 0.64f),
+            fontSize = 16.sp,
+            lineHeight = 21.sp,
+            fontWeight = FontWeight.ExtraBold,
+        )
+    }
+}
+
+@Composable
+private fun UrgentSummaryCard() {
+    SummaryCard(
+        modifier = Modifier.background(
+            Brush.verticalGradient(listOf(Color(0xFFFFFAF0), Color.White)),
+            RoundedCornerShape(24.dp),
+        ),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "⚡ 지금 바로 해야 할 일",
+                color = Color(0xFF9B5204),
+                fontSize = 21.sp,
+                lineHeight = 28.sp,
+                fontWeight = FontWeight.ExtraBold,
+            )
+            Pill(text = "2가지", color = Color(0xFFD77A00), background = Color(0xFFD77A00))
+        }
+        Spacer(modifier = Modifier.height(10.dp))
+        SummaryItem(
+            iconText = "💊",
+            iconBackground = Color(0xFFFFEBEE),
+            title = "혈압약 복용 확인",
+            subtitle = "오늘 복용 여부를 확인해주세요",
+            badgeText = "지금",
+            badgeColor = Color(0xFFD2232A),
+            badgeBackground = Color(0xFFFFEAED),
+        )
+        SummaryDivider()
+        SummaryItem(
+            iconText = "🏥",
+            iconBackground = Color(0xFFFFF2DC),
+            title = "내일 정형외과 예약 확인",
+            subtitle = "내일 오후 2시 · 교통편 준비",
+            badgeText = "내일",
+            badgeColor = Color(0xFFB85B00),
+            badgeBackground = Color(0xFFFFF1D9),
+        )
+    }
+}
+
+@Composable
+private fun TodayStatusCard() {
+    SummaryCard {
+        Text(
+            text = "오늘 상태 요약",
+            color = OneUiInk.copy(alpha = 0.52f),
+            fontSize = 15.sp,
+            fontWeight = FontWeight.ExtraBold,
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        SummaryItem(
+            iconText = "🍚",
+            iconBackground = Color(0xFFE9F7EE),
+            title = "식사",
+            subtitle = "아침 식사 하셨다고 말씀하심",
+            badgeText = "완료",
+            badgeColor = Color(0xFF1A7B39),
+            badgeBackground = Color(0xFFE9F7EE),
+        )
+        SummaryDivider()
+        SummaryItem(
+            iconText = "💊",
+            iconBackground = Color(0xFFE8F0FF),
+            title = "복약",
+            subtitle = "혈압약 복용 여부 확인 필요",
+            badgeText = "확인",
+            badgeColor = Color(0xFFB85B00),
+            badgeBackground = Color(0xFFFFF1D9),
+        )
+        SummaryDivider()
+        SummaryItem(
+            iconText = "😊",
+            iconBackground = Color(0xFFFFF2DC),
+            title = "기분",
+            subtitle = "기분 좋다고 하심",
+            badgeText = "양호",
+            badgeColor = Color(0xFF1A7B39),
+            badgeBackground = Color(0xFFE9F7EE),
+        )
+        SummaryDivider()
+        SummaryItem(
+            iconText = "🏥",
+            iconBackground = Color(0xFFFFEBEE),
+            title = "병원 일정",
+            subtitle = "내일 오후 2시 정형외과",
+            badgeText = "내일",
+            badgeColor = Color(0xFFB85B00),
+            badgeBackground = Color(0xFFFFF1D9),
+        )
+    }
+}
+
+@Composable
+private fun SyncInfoRow() {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(24.dp))
+            .background(Color(0xFFEEF5FF))
+            .border(1.dp, Color(0x0D000000), RoundedCornerShape(24.dp))
+            .padding(15.dp),
+        horizontalArrangement = Arrangement.spacedBy(11.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(text = "☁️", fontSize = 24.sp)
+        Text(
+            text = "통화 데이터가 보호자 앱에 자동 전송되었습니다.",
+            color = Color(0xFF155099),
+            fontSize = 18.sp,
+            lineHeight = 26.sp,
+            fontWeight = FontWeight.ExtraBold,
+        )
+    }
+}
+
+@Composable
+private fun NextCallCard() {
+    SummaryCard {
+        SummaryItem(
+            iconText = "📅",
+            iconBackground = Color(0xFFE9F7EE),
+            title = "다음 전화 예정",
+            subtitle = "내일 오전 9시 40분 · 안부 + 병원 일정",
+            badgeText = null,
+            badgeColor = Color.Transparent,
+            badgeBackground = Color.Transparent,
+        )
+    }
+}
+
+@Composable
+private fun SummaryCard(
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .shadow(8.dp, RoundedCornerShape(24.dp), ambientColor = Color(0x0A000000))
+            .clip(RoundedCornerShape(24.dp))
+            .background(Color.White)
+            .border(1.dp, Color(0x0D000000), RoundedCornerShape(24.dp))
+            .then(modifier)
+            .padding(16.dp),
+        content = content,
+    )
+}
+
+@Composable
+private fun SummaryItem(
+    iconText: String,
+    iconBackground: Color,
+    title: String,
+    subtitle: String,
+    badgeText: String?,
+    badgeColor: Color,
+    badgeBackground: Color,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 10.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(44.dp)
+                .clip(RoundedCornerShape(15.dp))
+                .background(iconBackground),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(text = iconText, fontSize = 23.sp)
+        }
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                text = title,
+                color = OneUiInk,
+                fontSize = 21.sp,
+                lineHeight = 27.sp,
+                fontWeight = FontWeight.ExtraBold,
+            )
+            Text(
+                text = subtitle,
+                color = OneUiInk.copy(alpha = 0.52f),
+                fontSize = 16.sp,
+                lineHeight = 22.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+        badgeText?.let {
+            Pill(text = it, color = badgeColor, background = badgeBackground)
+        }
+    }
+}
+
+@Composable
+private fun SummaryDivider() {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(1.dp)
+            .background(Color(0x0E000000)),
+    )
+}
+
+@Composable
+private fun Pill(
+    text: String,
+    color: Color,
+    background: Color,
+) {
+    val foreground = if (background == color) Color.White else color
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(background)
+            .padding(horizontal = 9.dp, vertical = 5.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = text,
+            color = foreground,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.ExtraBold,
+        )
     }
 }
 
