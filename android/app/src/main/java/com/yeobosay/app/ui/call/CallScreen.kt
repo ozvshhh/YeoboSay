@@ -24,15 +24,23 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.CallEnd
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -41,33 +49,45 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.yeobosay.app.ui.theme.YeoboSayFontFamily
 import com.yeobosay.app.ui.theme.YeoboSayTheme
 import java.util.Locale
 
-private val IncomingGradient = Brush.linearGradient(
+private val OneUiBackground = Color(0xFFF7F7F9)
+private val OneUiSurface = Color(0xFFFFFFFF)
+private val OneUiInk = Color(0xFF0B0D12)
+private val OneUiMuted = Color(0xFF70737B)
+private val OneUiLine = Color(0x0A000000)
+private val OneUiSoftLine = Color(0x08000000)
+private val OneUiPanel = Color(0xFFFDFDFE)
+private val CallGreenLight = Color(0xFF29D66F)
+private val CallGreenDeep = Color(0xFF11A34C)
+private val CallRedLight = Color(0xFFFF675E)
+private val CallRedDeep = Color(0xFFEE2F28)
+private val CallBlue = Color(0xFF2D7FF9)
+
+private val WhitePhoneBackground = Brush.verticalGradient(
     colors = listOf(
-        Color(0xFFF0E6FF),
-        Color(0xFFFCE4F0),
-        Color(0xFFE8D8F8),
-        Color(0xFFFFD6E8),
-        Color(0xFFE4D4F8),
+        Color(0xFFFFFFFF),
+        Color(0xFFFBFBFC),
+        OneUiBackground,
     ),
 )
-
-private val AcceptGreen = Color(0xFF2E9E4F)
-private val DeclineRed = Color(0xFFD93025)
-private val ElderText = Color(0xFF222222)
 
 @Composable
 fun CallRoute(
@@ -122,32 +142,39 @@ fun CallScreen(
     onAcceptButtonSizeChange: (AcceptButtonSize) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    when {
-        state.incomingCall != null -> IncomingCallScreen(
-            state = state,
-            incomingCall = state.incomingCall,
-            onAccept = onAcceptIncomingCall,
-            onDecline = onDeclineIncomingCall,
-            modifier = modifier,
-        )
+    CompositionLocalProvider(
+        LocalTextStyle provides LocalTextStyle.current.copy(
+            fontFamily = YeoboSayFontFamily,
+            letterSpacing = 0.sp,
+        ),
+    ) {
+        when {
+            state.incomingCall != null -> IncomingCallScreen(
+                state = state,
+                incomingCall = state.incomingCall,
+                onAccept = onAcceptIncomingCall,
+                onDecline = onDeclineIncomingCall,
+                modifier = modifier,
+            )
 
-        state.callSessionId != null -> ActiveCallScreen(
-            state = state,
-            onToggleRecording = onToggleRecording,
-            onStopPlayback = onStopPlayback,
-            onEndSession = onEndSession,
-            modifier = modifier,
-        )
+            state.callSessionId != null -> ActiveCallScreen(
+                state = state,
+                onToggleRecording = onToggleRecording,
+                onStopPlayback = onStopPlayback,
+                onEndSession = onEndSession,
+                modifier = modifier,
+            )
 
-        else -> HomeCallScreen(
-            state = state,
-            onStartSession = onStartSession,
-            onRequestTestCall = onRequestTestCall,
-            onToggleRecording = onToggleRecording,
-            onStopPlayback = onStopPlayback,
-            onAcceptButtonSizeChange = onAcceptButtonSizeChange,
-            modifier = modifier,
-        )
+            else -> HomeCallScreen(
+                state = state,
+                onStartSession = onStartSession,
+                onRequestTestCall = onRequestTestCall,
+                onToggleRecording = onToggleRecording,
+                onStopPlayback = onStopPlayback,
+                onAcceptButtonSizeChange = onAcceptButtonSizeChange,
+                modifier = modifier,
+            )
+        }
     }
 }
 
@@ -161,37 +188,56 @@ private fun HomeCallScreen(
     onAcceptButtonSizeChange: (AcceptButtonSize) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Surface(modifier = modifier.fillMaxSize()) {
+    Surface(
+        modifier = modifier.fillMaxSize(),
+        color = OneUiBackground,
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(20.dp),
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .padding(horizontal = 22.dp, vertical = 24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
                 Text(
                     text = "YeoboSay",
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.SemiBold,
+                    color = OneUiInk,
+                    fontSize = 38.sp,
+                    lineHeight = 42.sp,
+                    fontWeight = FontWeight.ExtraBold,
                 )
                 Text(
                     text = state.statusText,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = OneUiMuted,
+                    fontSize = 18.sp,
+                    lineHeight = 25.sp,
+                    fontWeight = FontWeight.SemiBold,
                 )
                 Text(
                     text = state.socketStatusText,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.outline,
+                    color = OneUiMuted.copy(alpha = 0.74f),
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp,
+                    fontWeight = FontWeight.Medium,
                 )
             }
 
             OutlinedButton(
                 onClick = onRequestTestCall,
                 enabled = !state.isRequestingTestCall,
-                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(25.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(54.dp),
             ) {
-                Text(if (state.isRequestingTestCall) "전화 요청 중" else "테스트 전화 요청")
+                Text(
+                    text = if (state.isRequestingTestCall) "전화 요청 중" else "테스트 전화 요청",
+                    color = OneUiInk,
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold,
+                )
             }
 
             AcceptButtonSizeSetting(
@@ -203,29 +249,34 @@ private fun HomeCallScreen(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Button(
-                    onClick = onStartSession,
+                OneUiActionButton(
+                    text = if (state.isStartingSession) "시작 중" else "통화 시작",
                     enabled = !state.isStartingSession,
+                    containerColor = Color(0xFF55679D),
+                    contentColor = Color.White,
+                    onClick = onStartSession,
                     modifier = Modifier.weight(1f),
-                ) {
-                    Text(if (state.isStartingSession) "시작 중" else "통화 시작")
-                }
+                )
 
-                Button(
-                    onClick = onToggleRecording,
+                OneUiActionButton(
+                    text = "녹음 시작",
                     enabled = false,
+                    containerColor = Color(0xFFE3E3E8),
+                    contentColor = OneUiMuted,
+                    onClick = onToggleRecording,
                     modifier = Modifier.weight(1f),
-                ) {
-                    Text("녹음 시작")
-                }
+                )
             }
 
             if (state.isPlaying) {
                 OutlinedButton(
                     onClick = onStopPlayback,
-                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(25.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(52.dp),
                 ) {
-                    Text("응답 재생 중지")
+                    Text("응답 재생 중지", fontSize = 16.sp, fontWeight = FontWeight.Bold)
                 }
             }
 
@@ -235,7 +286,8 @@ private fun HomeCallScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                contentPadding = PaddingValues(bottom = 12.dp),
             ) {
                 items(state.messages) { message ->
                     MessageBubble(message = message)
@@ -246,27 +298,58 @@ private fun HomeCallScreen(
 }
 
 @Composable
+private fun OneUiActionButton(
+    text: String,
+    enabled: Boolean,
+    containerColor: Color,
+    contentColor: Color,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        shape = RoundedCornerShape(25.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = containerColor,
+            contentColor = contentColor,
+            disabledContainerColor = containerColor,
+            disabledContentColor = contentColor.copy(alpha = 0.56f),
+        ),
+        modifier = modifier.height(54.dp),
+    ) {
+        Text(text = text, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
 private fun AcceptButtonSizeSetting(
     selected: AcceptButtonSize,
     onSelected: (AcceptButtonSize) -> Unit,
 ) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        modifier = Modifier
+            .fillMaxWidth()
+            .shadow(10.dp, RoundedCornerShape(24.dp), ambientColor = Color(0x12000000)),
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(containerColor = OneUiSurface),
     ) {
         Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(
                 text = "설정",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
+                color = OneUiInk,
+                fontSize = 22.sp,
+                lineHeight = 28.sp,
+                fontWeight = FontWeight.ExtraBold,
             )
             Text(
                 text = "전화받기 버튼 크기",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = OneUiMuted,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold,
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 AcceptSizeButton(
@@ -293,14 +376,25 @@ private fun AcceptSizeButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    if (selected) {
-        Button(onClick = onClick, modifier = modifier) {
-            Text(text)
-        }
-    } else {
-        OutlinedButton(onClick = onClick, modifier = modifier) {
-            Text(text)
-        }
+    val backgroundColor = if (selected) Color(0xFFEFF4FF) else Color(0xFFF5F5F7)
+    val borderColor = if (selected) CallBlue.copy(alpha = 0.26f) else OneUiLine
+    val textColor = if (selected) Color(0xFF1F6FE8) else OneUiMuted
+
+    Box(
+        modifier = modifier
+            .height(46.dp)
+            .clip(RoundedCornerShape(23.dp))
+            .background(backgroundColor)
+            .border(1.dp, borderColor, RoundedCornerShape(23.dp))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = text,
+            color = textColor,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold,
+        )
     }
 }
 
@@ -313,89 +407,115 @@ private fun IncomingCallScreen(
     modifier: Modifier = Modifier,
 ) {
     val acceptButtonSize = when (state.acceptButtonSize) {
-        AcceptButtonSize.Normal -> 76.dp
-        AcceptButtonSize.Large -> 114.dp
-    }
-    val acceptIconSize = when (state.acceptButtonSize) {
-        AcceptButtonSize.Normal -> 36.sp
-        AcceptButtonSize.Large -> 48.sp
-    }
-    val acceptLabelSize = when (state.acceptButtonSize) {
-        AcceptButtonSize.Normal -> 26.sp
-        AcceptButtonSize.Large -> 30.sp
+        AcceptButtonSize.Normal -> 84.dp
+        AcceptButtonSize.Large -> 112.dp
     }
 
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(IncomingGradient)
+            .background(WhitePhoneBackground)
             .statusBarsPadding()
             .navigationBarsPadding(),
     ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 28.dp, vertical = 28.dp),
+                .padding(horizontal = 30.dp, vertical = 26.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Spacer(modifier = Modifier.weight(0.7f))
-            IncomingAvatar(size = 110.dp)
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Call,
+                    contentDescription = null,
+                    tint = OneUiInk.copy(alpha = 0.78f),
+                    modifier = Modifier.size(18.dp),
+                )
+                Text(
+                    text = "수신 중",
+                    color = OneUiInk.copy(alpha = 0.76f),
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                )
+            }
+
+            Spacer(modifier = Modifier.weight(0.72f))
+
+            OneUiAvatar(size = 112.dp, textSize = 40.sp)
             Spacer(modifier = Modifier.height(28.dp))
             Text(
-                text = "전화가 왔어요",
-                color = ElderText.copy(alpha = 0.72f),
-                fontSize = 18.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
                 text = incomingCall.callerName,
-                color = ElderText,
-                fontSize = 42.sp,
-                lineHeight = 46.sp,
-                fontWeight = FontWeight.Bold,
+                color = OneUiInk,
+                fontSize = 48.sp,
+                lineHeight = 54.sp,
+                fontWeight = FontWeight.ExtraBold,
                 textAlign = TextAlign.Center,
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
                 text = incomingCall.message.ifBlank { "AI 안부 전화" },
-                color = ElderText.copy(alpha = 0.66f),
-                fontSize = 22.sp,
-                fontWeight = FontWeight.Medium,
+                color = OneUiInk.copy(alpha = 0.55f),
+                fontSize = 21.sp,
+                lineHeight = 27.sp,
+                fontWeight = FontWeight.SemiBold,
                 textAlign = TextAlign.Center,
             )
+            Spacer(modifier = Modifier.height(18.dp))
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(Color.White.copy(alpha = 0.70f))
+                    .border(1.dp, OneUiLine, RoundedCornerShape(999.dp))
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+            ) {
+                Text(
+                    text = "어르신 안부 확인 전화",
+                    color = OneUiInk.copy(alpha = 0.50f),
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+
             ErrorCard(
                 errorText = state.errorText,
                 modifier = Modifier.padding(top = 22.dp),
             )
+
             Spacer(modifier = Modifier.weight(1f))
-            Box(
-                modifier = Modifier.fillMaxWidth(),
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Bottom,
             ) {
                 CircleCallButton(
-                    symbol = "☎",
-                    label = if (state.isAcceptingIncomingCall) "받는 중" else "전화 받기",
-                    color = AcceptGreen,
+                    icon = Icons.Filled.Call,
+                    label = if (state.isAcceptingIncomingCall) "받는 중" else "받기",
+                    gradient = Brush.verticalGradient(listOf(CallGreenLight, CallGreenDeep)),
                     size = acceptButtonSize,
-                    iconSize = acceptIconSize,
-                    labelSize = acceptLabelSize,
+                    iconSize = if (state.acceptButtonSize == AcceptButtonSize.Large) 44.dp else 34.dp,
+                    iconRotation = -8f,
+                    labelSize = 18.sp,
                     enabled = !state.isAcceptingIncomingCall && !state.isDecliningIncomingCall,
                     onClick = onAccept,
-                    modifier = Modifier.align(Alignment.BottomStart),
                 )
                 CircleCallButton(
-                    symbol = "✕",
+                    icon = Icons.Filled.CallEnd,
                     label = if (state.isDecliningIncomingCall) "거절 중" else "거절",
-                    color = DeclineRed,
-                    size = 76.dp,
-                    iconSize = 34.sp,
-                    labelSize = 26.sp,
+                    gradient = Brush.verticalGradient(listOf(CallRedLight, CallRedDeep)),
+                    size = 84.dp,
+                    iconSize = 36.dp,
+                    labelSize = 18.sp,
                     enabled = !state.isAcceptingIncomingCall && !state.isDecliningIncomingCall,
                     onClick = onDecline,
-                    modifier = Modifier.align(Alignment.BottomEnd),
                 )
             }
-            Spacer(modifier = Modifier.height(26.dp))
+            Spacer(modifier = Modifier.height(30.dp))
         }
     }
 }
@@ -413,36 +533,38 @@ private fun ActiveCallScreen(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(IncomingGradient)
+            .background(WhitePhoneBackground)
             .statusBarsPadding()
             .navigationBarsPadding(),
     ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 20.dp, vertical = 18.dp),
+                .padding(horizontal = 16.dp, vertical = 18.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text(
-                text = "통화 중... ${formatElapsed(state.callElapsedSeconds)}",
-                color = ElderText.copy(alpha = 0.72f),
-                fontSize = 17.sp,
-                fontWeight = FontWeight.SemiBold,
+                text = if (state.callElapsedSeconds == 0L) "통화 중..." else formatElapsed(state.callElapsedSeconds),
+                color = OneUiInk.copy(alpha = 0.48f),
+                fontSize = 22.sp,
+                fontWeight = FontWeight.Bold,
             )
+            Spacer(modifier = Modifier.height(15.dp))
+            OneUiAvatar(size = 86.dp, textSize = 32.sp)
             Spacer(modifier = Modifier.height(14.dp))
-            IncomingAvatar(size = 80.dp, emojiSize = 36.sp)
-            Spacer(modifier = Modifier.height(10.dp))
             Text(
                 text = "여보세요",
-                color = ElderText,
-                fontSize = 30.sp,
-                fontWeight = FontWeight.Bold,
+                color = OneUiInk,
+                fontSize = 38.sp,
+                lineHeight = 44.sp,
+                fontWeight = FontWeight.ExtraBold,
             )
             Text(
                 text = "AI 안부 전화",
-                color = ElderText.copy(alpha = 0.62f),
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Medium,
+                color = OneUiInk.copy(alpha = 0.56f),
+                fontSize = 18.sp,
+                lineHeight = 24.sp,
+                fontWeight = FontWeight.SemiBold,
             )
 
             ErrorCard(
@@ -450,16 +572,42 @@ private fun ActiveCallScreen(
                 modifier = Modifier.padding(top = 14.dp),
             )
 
-            LazyColumn(
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
-                    .padding(top = 20.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                contentPadding = PaddingValues(bottom = 16.dp),
+                    .padding(top = 18.dp)
+                    .shadow(
+                        elevation = 3.dp,
+                        shape = RoundedCornerShape(28.dp),
+                        ambientColor = Color(0x08000000),
+                        spotColor = Color(0x0A000000),
+                    )
+                    .clip(RoundedCornerShape(28.dp))
+                    .background(OneUiSurface)
+                    .border(1.dp, OneUiSoftLine, RoundedCornerShape(28.dp))
+                    .padding(16.dp),
+                contentAlignment = Alignment.Center,
             ) {
-                items(state.messages) { message ->
-                    ActiveMessageBubble(message = message)
+                if (state.messages.isEmpty()) {
+                    Text(
+                        text = "통화가 시작되면 안부 대화가 여기에 기록됩니다.",
+                        color = OneUiInk.copy(alpha = 0.42f),
+                        fontSize = 17.sp,
+                        lineHeight = 24.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        textAlign = TextAlign.Center,
+                    )
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        contentPadding = PaddingValues(vertical = 2.dp),
+                    ) {
+                        items(state.messages) { message ->
+                            ActiveMessageBubble(message = message)
+                        }
+                    }
                 }
             }
 
@@ -479,69 +627,77 @@ private fun ActiveCallScreen(
 }
 
 @Composable
-private fun IncomingAvatar(
+private fun OneUiAvatar(
     size: Dp,
-    emojiSize: androidx.compose.ui.unit.TextUnit = 48.sp,
+    textSize: TextUnit,
 ) {
     Box(
         modifier = Modifier
             .size(size)
             .clip(CircleShape)
-            .background(Color.White.copy(alpha = 0.55f))
-            .border(3.dp, Color(0xFFBBA7E8).copy(alpha = 0.65f), CircleShape),
+            .background(
+                Brush.linearGradient(
+                    colors = listOf(Color(0xFFCFDAE9), Color(0xFFAEBED1)),
+                ),
+            )
+            .border(1.dp, Color.White.copy(alpha = 0.90f), CircleShape),
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            text = "🤖",
-            fontSize = emojiSize,
-            textAlign = TextAlign.Center,
+            text = "여",
+            color = Color.White,
+            fontSize = textSize,
+            fontWeight = FontWeight.ExtraBold,
         )
     }
 }
 
 @Composable
 private fun CircleCallButton(
-    symbol: String,
+    icon: ImageVector,
     label: String,
-    color: Color,
+    gradient: Brush,
     size: Dp,
-    iconSize: androidx.compose.ui.unit.TextUnit,
-    labelSize: androidx.compose.ui.unit.TextUnit,
+    iconSize: Dp,
+    iconRotation: Float = 0f,
+    labelSize: TextUnit,
     enabled: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val effectiveColor = if (enabled) color else color.copy(alpha = 0.45f)
+    val disabledGradient = Brush.verticalGradient(
+        colors = listOf(Color(0xFFBFC2C8), Color(0xFFA9ADB5)),
+    )
+
     Column(
         modifier = modifier,
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Button(
-            onClick = onClick,
-            enabled = enabled,
-            shape = CircleShape,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = effectiveColor,
-                contentColor = Color.White,
-                disabledContainerColor = effectiveColor,
-                disabledContentColor = Color.White.copy(alpha = 0.72f),
-            ),
-            contentPadding = PaddingValues(0.dp),
-            modifier = Modifier.size(size),
+        Box(
+            modifier = Modifier
+                .size(size)
+                .shadow(16.dp, CircleShape, ambientColor = Color(0x22000000))
+                .clip(CircleShape)
+                .background(if (enabled) gradient else disabledGradient)
+                .border(1.dp, Color.White.copy(alpha = 0.75f), CircleShape)
+                .clickable(enabled = enabled, onClick = onClick),
+            contentAlignment = Alignment.Center,
         ) {
-            Text(
-                text = symbol,
-                fontSize = iconSize,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center,
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = Color.White.copy(alpha = if (enabled) 1f else 0.72f),
+                modifier = Modifier
+                    .size(iconSize)
+                    .rotate(iconRotation),
             )
         }
         Text(
             text = label,
-            color = ElderText,
+            color = OneUiInk.copy(alpha = if (enabled) 0.82f else 0.46f),
             fontSize = labelSize,
-            fontWeight = FontWeight.Bold,
+            fontWeight = FontWeight.ExtraBold,
         )
     }
 }
@@ -561,18 +717,29 @@ private fun ActiveCallControls(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
-            .background(Color.White.copy(alpha = 0.56f))
-            .padding(horizontal = 18.dp, vertical = 18.dp),
+            .padding(top = 16.dp)
+            .shadow(
+                elevation = 4.dp,
+                shape = RoundedCornerShape(31.dp),
+                ambientColor = Color(0x08000000),
+                spotColor = Color(0x0A000000),
+            )
+            .clip(RoundedCornerShape(31.dp))
+            .background(OneUiPanel)
+            .border(1.dp, OneUiSoftLine, RoundedCornerShape(31.dp))
+            .padding(horizontal = 18.dp, vertical = 16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         if (isPlaying) {
             OutlinedButton(
                 onClick = onStopPlayback,
-                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(24.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp),
             ) {
-                Text("응답 재생 중지")
+                Text("응답 재생 중지", fontSize = 15.sp, fontWeight = FontWeight.Bold)
             }
         }
 
@@ -582,40 +749,43 @@ private fun ActiveCallControls(
                 isUploading -> "답변을 준비하고 있어요."
                 else -> "녹음 버튼을 눌러 말씀해 주세요."
             },
-            color = ElderText.copy(alpha = 0.72f),
+            color = OneUiInk.copy(alpha = 0.58f),
             fontSize = 15.sp,
+            lineHeight = 20.sp,
+            fontWeight = FontWeight.SemiBold,
             textAlign = TextAlign.Center,
         )
 
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceAround,
+            horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.Top,
         ) {
             ControlButton(
-                symbol = "🔊",
+                icon = Icons.AutoMirrored.Filled.VolumeUp,
                 label = if (isSpeakerOn) "스피커 켜짐" else "스피커",
-                color = if (isSpeakerOn) Color(0xFF5B6BA8) else Color.White.copy(alpha = 0.88f),
-                contentColor = if (isSpeakerOn) Color.White else ElderText,
+                selected = isSpeakerOn,
                 onClick = onToggleSpeaker,
             )
             ControlButton(
-                symbol = "✕",
-                label = if (isEndingSession) "종료 중" else "전화 끊기",
-                color = DeclineRed,
+                icon = Icons.Filled.CallEnd,
+                label = if (isEndingSession) "종료 중" else "통화 종료",
+                circleSize = 76.dp,
+                circleBrush = Brush.verticalGradient(listOf(CallRedLight, CallRedDeep)),
                 contentColor = Color.White,
                 enabled = !isEndingSession,
                 onClick = onEndSession,
             )
             ControlButton(
-                symbol = if (isRecording) "■" else "●",
+                icon = if (isRecording) Icons.Filled.Stop else Icons.Filled.Mic,
                 label = when {
                     isRecording -> "녹음 종료"
                     isUploading -> "업로드 중"
                     else -> "녹음"
                 },
-                color = if (isRecording) DeclineRed else Color.White.copy(alpha = 0.88f),
-                contentColor = if (isRecording) Color.White else Color(0xFF5B6BA8),
+                selected = false,
+                circleBrush = if (isRecording) Brush.verticalGradient(listOf(CallRedLight, CallRedDeep)) else null,
+                contentColor = if (isRecording) Color.White else OneUiInk.copy(alpha = 0.80f),
                 enabled = !isUploading && !isEndingSession,
                 onClick = onToggleRecording,
             )
@@ -625,37 +795,51 @@ private fun ActiveCallControls(
 
 @Composable
 private fun ControlButton(
-    symbol: String,
+    icon: ImageVector,
     label: String,
-    color: Color,
-    contentColor: Color,
+    selected: Boolean = false,
+    circleSize: Dp = 66.dp,
+    circleBrush: Brush? = null,
+    contentColor: Color = if (selected) Color(0xFF1F6FE8) else OneUiInk.copy(alpha = 0.80f),
     enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
+    val defaultBackground = if (selected) Color(0xFFEEF4FF) else OneUiSurface
+    val defaultBorder = if (selected) CallBlue.copy(alpha = 0.22f) else OneUiLine
+
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(9.dp),
     ) {
         Box(
             modifier = Modifier
-                .size(62.dp)
+                .size(circleSize)
+                .shadow(8.dp, CircleShape, ambientColor = Color(0x12000000))
                 .clip(CircleShape)
-                .background(if (enabled) color else color.copy(alpha = 0.5f))
+                .then(
+                    if (circleBrush != null) {
+                        Modifier.background(circleBrush)
+                    } else {
+                        Modifier.background(defaultBackground)
+                    },
+                )
+                .border(1.dp, if (circleBrush != null) Color.White.copy(alpha = 0.70f) else defaultBorder, CircleShape)
                 .clickable(enabled = enabled, onClick = onClick),
             contentAlignment = Alignment.Center,
         ) {
-            Text(
-                text = symbol,
-                color = if (enabled) contentColor else contentColor.copy(alpha = 0.5f),
-                fontSize = 25.sp,
-                fontWeight = FontWeight.Bold,
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = if (enabled) contentColor else contentColor.copy(alpha = 0.40f),
+                modifier = Modifier.size(if (circleSize > 70.dp) 32.dp else 26.dp),
             )
         }
         Text(
             text = label,
-            color = ElderText.copy(alpha = if (enabled) 0.8f else 0.45f),
-            fontSize = 12.sp,
-            fontWeight = FontWeight.SemiBold,
+            color = OneUiInk.copy(alpha = if (enabled) 0.76f else 0.38f),
+            fontSize = 14.sp,
+            lineHeight = 18.sp,
+            fontWeight = FontWeight.ExtraBold,
             textAlign = TextAlign.Center,
         )
     }
@@ -668,15 +852,17 @@ private fun ErrorCard(
 ) {
     errorText?.let {
         Card(
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.errorContainer,
-            ),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFFFFDAD6)),
             modifier = modifier.fillMaxWidth(),
         ) {
             Text(
                 text = it,
-                modifier = Modifier.padding(14.dp),
-                color = MaterialTheme.colorScheme.onErrorContainer,
+                modifier = Modifier.padding(15.dp),
+                color = Color(0xFF6E1915),
+                fontSize = 15.sp,
+                lineHeight = 21.sp,
+                fontWeight = FontWeight.SemiBold,
             )
         }
     }
@@ -691,35 +877,38 @@ private fun MessageBubble(message: CallMessage) {
         MessageRole.System -> "시스템"
     }
     val containerColor = when {
-        message.failed -> MaterialTheme.colorScheme.errorContainer
-        isUser -> MaterialTheme.colorScheme.primaryContainer
-        else -> MaterialTheme.colorScheme.surfaceVariant
+        message.failed -> Color(0xFFFFDAD6)
+        isUser -> Color(0xFFE7F6EC)
+        else -> OneUiSurface
     }
     val contentColor = when {
-        message.failed -> MaterialTheme.colorScheme.onErrorContainer
-        isUser -> MaterialTheme.colorScheme.onPrimaryContainer
-        else -> MaterialTheme.colorScheme.onSurfaceVariant
+        message.failed -> Color(0xFF6E1915)
+        isUser -> Color(0xFF0E522A)
+        else -> OneUiInk
     }
 
     Box(modifier = Modifier.fillMaxWidth()) {
         Card(
             modifier = Modifier
-                .fillMaxWidth(0.9f)
+                .fillMaxWidth(0.90f)
                 .align(if (isUser) Alignment.CenterEnd else Alignment.CenterStart),
+            shape = RoundedCornerShape(22.dp),
             colors = CardDefaults.cardColors(containerColor = containerColor),
         ) {
-            Column(modifier = Modifier.padding(14.dp)) {
+            Column(modifier = Modifier.padding(16.dp)) {
                 Text(
                     text = if (message.riskFlag) "$label · 위험 감지" else label,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = contentColor,
-                    fontWeight = FontWeight.SemiBold,
+                    color = contentColor.copy(alpha = 0.70f),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
                 )
-                Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(5.dp))
                 Text(
                     text = message.text,
-                    style = MaterialTheme.typography.bodyLarge,
                     color = contentColor,
+                    fontSize = 18.sp,
+                    lineHeight = 26.sp,
+                    fontWeight = FontWeight.Medium,
                 )
             }
         }
@@ -734,43 +923,44 @@ private fun ActiveMessageBubble(message: CallMessage) {
         MessageRole.Assistant -> "AI"
         MessageRole.System -> "시스템"
     }
-    val bubbleColor = when {
-        message.failed -> MaterialTheme.colorScheme.errorContainer
-        isUser -> Color(0xFFDDF3E4).copy(alpha = 0.86f)
-        else -> Color.White.copy(alpha = 0.72f)
+    val bubbleBrush = when {
+        message.failed -> Brush.verticalGradient(listOf(Color(0xFFFFE4E1), Color(0xFFFFDAD6)))
+        isUser -> Brush.verticalGradient(listOf(Color(0xFF9DEDB3), Color(0xFF79DF99)))
+        else -> Brush.verticalGradient(listOf(Color(0xFFF7F7F8), Color(0xFFF0F0F2)))
     }
     val textColor = when {
-        message.failed -> MaterialTheme.colorScheme.onErrorContainer
-        isUser -> Color(0xFF1D5E35)
-        else -> ElderText
+        message.failed -> Color(0xFF6E1915)
+        isUser -> Color(0xFF06120B)
+        else -> OneUiInk
     }
     val bubbleShape = if (isUser) {
-        RoundedCornerShape(18.dp, 18.dp, 4.dp, 18.dp)
+        RoundedCornerShape(21.dp, 21.dp, 6.dp, 21.dp)
     } else {
-        RoundedCornerShape(18.dp, 18.dp, 18.dp, 4.dp)
+        RoundedCornerShape(21.dp, 21.dp, 21.dp, 6.dp)
     }
 
     Box(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier
-                .fillMaxWidth(0.86f)
+                .fillMaxWidth(0.83f)
                 .align(if (isUser) Alignment.CenterEnd else Alignment.CenterStart)
                 .clip(bubbleShape)
-                .background(bubbleColor)
-                .padding(horizontal = 16.dp, vertical = 13.dp),
+                .background(bubbleBrush)
+                .border(1.dp, Color(0x0C000000), bubbleShape)
+                .padding(horizontal = 15.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Text(
                 text = if (message.riskFlag) "$label · 확인 필요" else label,
-                color = textColor.copy(alpha = 0.72f),
+                color = textColor.copy(alpha = 0.66f),
                 fontSize = 12.sp,
-                fontWeight = FontWeight.Bold,
+                fontWeight = FontWeight.ExtraBold,
             )
             Text(
                 text = message.text,
                 color = textColor,
-                fontSize = 19.sp,
-                lineHeight = 27.sp,
+                fontSize = 17.sp,
+                lineHeight = 25.sp,
                 fontWeight = FontWeight.Medium,
             )
         }
