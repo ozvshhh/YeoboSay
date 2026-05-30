@@ -34,6 +34,8 @@ data class AudioPolicyResponse(
 
 data class ConversationPolicyResponse(
     val firstGreetingText: String,
+    val firstGreetingAudioMimeType: String?,
+    val firstGreetingAudioBase64: String?,
     val noResponsePromptText: String,
     val maxDurationClosingText: String,
     val targetTurnCount: Int,
@@ -205,6 +207,8 @@ class YeoboSayApi(
     private fun JSONObject.toConversationPolicyResponse(): ConversationPolicyResponse =
         ConversationPolicyResponse(
             firstGreetingText = optString("firstGreetingText"),
+            firstGreetingAudioMimeType = optString("firstGreetingAudioMimeType").ifBlank { null },
+            firstGreetingAudioBase64 = optString("firstGreetingAudioBase64").ifBlank { null },
             noResponsePromptText = optString("noResponsePromptText"),
             maxDurationClosingText = optString("maxDurationClosingText"),
             targetTurnCount = optInt("targetTurnCount", 5),

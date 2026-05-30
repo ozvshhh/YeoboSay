@@ -310,7 +310,8 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
         }
             .onSuccess { session ->
                 val isAutoConversation = session.mode == CallSessionMode.AutoConversation.apiValue
-                val greetingText = session.conversationPolicy
+                val conversationPolicy = session.conversationPolicy
+                val greetingText = conversationPolicy
                     ?.firstGreetingText
                     ?.takeIf { it.isNotBlank() }
                     ?: DEFAULT_GREETING
@@ -339,14 +340,10 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
                 if (isAutoConversation) {
-                    greetingSpeaker.speak(greetingText) {
-                        _uiState.update {
-                            it.copy(
-                                isPlaying = false,
-                                statusText = "말씀을 듣고 있어요.",
-                            )
-                        }
-                    }
+                    playFirstGreeting(
+                        greetingText = greetingText,
+                        audioBase64 = conversationPolicy?.firstGreetingAudioBase64,
+                    )
                 }
             }
             .onFailure { error ->
@@ -377,6 +374,26 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
         callTimerJob?.cancel()
         callTimerJob = null
         callStartedAtMillis = 0L
+    }
+
+    private fun playFirstGreeting(
+        greetingText: String,
+        audioBase64: String?,
+    ) {
+        val onComplete = {
+            _uiState.update {
+                it.copy(
+                    isPlaying = false,
+                    statusText = "말씀을 듣고 있어요.",
+                )
+            }
+        }
+
+        if (!audioBase64.isNullOrBlank()) {
+            player.playBase64Mp3(audioBase64, onComplete)
+        } else {
+            greetingSpeaker.speak(greetingText, onComplete)
+        }
     }
 
     fun toggleRecording() {

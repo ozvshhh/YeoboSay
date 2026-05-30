@@ -57,6 +57,11 @@ const AUTO_CONVERSATION_POLICY: ConversationPolicyResponseDto = {
   maxDurationSeconds: CALL_SESSION_DURATION_MS / 1000,
 };
 
+type FirstGreetingAudio = {
+  mimeType: string;
+  base64: string;
+};
+
 const RISK_KEYWORDS: Array<{ type: string; keywords: string[] }> = [
   {
     type: 'SELF_HARM',
@@ -119,7 +124,15 @@ export class CallSessionsService {
 
     this.demoLogger.callSessionCreated(session.id, session.expiresAt);
 
-    return this.toCallSessionResponse(session, isAutoConversation);
+    const firstGreetingAudio = isAutoConversation
+      ? await this.createFirstGreetingAudio(session.id)
+      : null;
+
+    return this.toCallSessionResponse(
+      session,
+      isAutoConversation,
+      firstGreetingAudio,
+    );
   }
 
   async findOne(id: string): Promise<CallSessionResponseDto> {
@@ -391,6 +404,7 @@ export class CallSessionsService {
   private toCallSessionResponse(
     session: CallSession,
     includePolicies = false,
+    firstGreetingAudio: FirstGreetingAudio | null = null,
   ): CallSessionResponseDto {
     const sessionDetails = session as CallSession & {
       mode?: CallSessionMode;
@@ -416,10 +430,34 @@ export class CallSessionsService {
       ...(includePolicies
         ? {
             audioPolicy: AUTO_AUDIO_POLICY,
-            conversationPolicy: AUTO_CONVERSATION_POLICY,
+            conversationPolicy: {
+              ...AUTO_CONVERSATION_POLICY,
+              firstGreetingAudioMimeType: firstGreetingAudio?.mimeType ?? null,
+              firstGreetingAudioBase64: firstGreetingAudio?.base64 ?? null,
+            },
           }
         : {}),
     };
+  }
+
+  private async createFirstGreetingAudio(
+    callSessionId: string,
+  ): Promise<FirstGreetingAudio | null> {
+    try {
+      const audio = await this.openAiService.synthesizeSpeech(
+        AUTO_CONVERSATION_FIRST_GREETING,
+      );
+      return {
+        mimeType: 'audio/mpeg',
+        base64: audio.toString('base64'),
+      };
+    } catch (error) {
+      this.logger.warn(
+        `First greeting TTS generation failed: callSessionId=${callSessionId}`,
+        error instanceof Error ? error.stack : undefined,
+      );
+      return null;
+    }
   }
 
   private toConversationTurnResponse(
