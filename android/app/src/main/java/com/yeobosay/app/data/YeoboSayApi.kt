@@ -12,7 +12,32 @@ import java.net.URL
 data class CallSessionResponse(
     val id: String,
     val status: String,
+    val mode: String,
+    val currentStep: String?,
+    val turnCount: Int,
+    val targetTurnCount: Int,
+    val riskFlag: Boolean,
+    val riskType: String?,
+    val startedAt: String?,
+    val endedAt: String?,
     val expiresAt: String,
+    val audioPolicy: AudioPolicyResponse?,
+    val conversationPolicy: ConversationPolicyResponse?,
+)
+
+data class AudioPolicyResponse(
+    val silenceTimeoutMs: Int,
+    val maxUtteranceMs: Int,
+    val uploadMimeType: String,
+    val bargeInEnabled: Boolean,
+)
+
+data class ConversationPolicyResponse(
+    val firstGreetingText: String,
+    val noResponsePromptText: String,
+    val maxDurationClosingText: String,
+    val targetTurnCount: Int,
+    val maxDurationSeconds: Int,
 )
 
 data class ConversationTurnResponse(
@@ -46,16 +71,25 @@ data class CallInvitationResponse(
     val declinedAt: String?,
 )
 
+enum class CallSessionMode(val apiValue: String) {
+    ManualRecording("manual_recording"),
+    AutoConversation("auto_conversation"),
+}
+
 class YeoboSayApi(
     private val baseUrl: String = "http://10.0.2.2:3000",
 ) {
-    suspend fun createCallSession(): CallSessionResponse = withContext(Dispatchers.IO) {
-        val response = requestJson("POST", "/call-sessions")
-        CallSessionResponse(
-            id = response.getString("id"),
-            status = response.getString("status"),
-            expiresAt = response.getString("expiresAt"),
-        )
+    suspend fun createCallSession(
+        mode: CallSessionMode = CallSessionMode.ManualRecording,
+        source: String? = null,
+        callInvitationId: String? = null,
+    ): CallSessionResponse = withContext(Dispatchers.IO) {
+        val requestBody = JSONObject().apply {
+            put("mode", mode.apiValue)
+            source?.let { put("source", it) }
+            callInvitationId?.let { put("callInvitationId", it) }
+        }
+        requestJson("POST", "/call-sessions", requestBody).toCallSessionResponse()
     }
 
     suspend fun getTurns(callSessionId: String): List<ConversationTurnResponse> =
@@ -77,12 +111,7 @@ class YeoboSayApi(
 
     suspend fun endCallSession(callSessionId: String): CallSessionResponse =
         withContext(Dispatchers.IO) {
-            val response = requestJson("POST", "/call-sessions/$callSessionId/end")
-            CallSessionResponse(
-                id = response.getString("id"),
-                status = response.getString("status"),
-                expiresAt = response.getString("expiresAt"),
-            )
+            requestJson("POST", "/call-sessions/$callSessionId/end").toCallSessionResponse()
         }
 
     suspend fun createTestCallInvitation(): CallInvitationResponse = withContext(Dispatchers.IO) {
@@ -148,8 +177,47 @@ class YeoboSayApi(
             declinedAt = optString("declinedAt").ifBlank { null },
         )
 
-    private fun requestJson(method: String, path: String): JSONObject {
+    private fun JSONObject.toCallSessionResponse(): CallSessionResponse =
+        CallSessionResponse(
+            id = getString("id"),
+            status = getString("status"),
+            mode = optString("mode", CallSessionMode.ManualRecording.apiValue),
+            currentStep = optString("currentStep").ifBlank { null },
+            turnCount = optInt("turnCount", 0),
+            targetTurnCount = optInt("targetTurnCount", 5),
+            riskFlag = optBoolean("riskFlag", false),
+            riskType = optString("riskType").ifBlank { null },
+            startedAt = optString("startedAt").ifBlank { null },
+            endedAt = optString("endedAt").ifBlank { null },
+            expiresAt = getString("expiresAt"),
+            audioPolicy = optJSONObject("audioPolicy")?.toAudioPolicyResponse(),
+            conversationPolicy = optJSONObject("conversationPolicy")?.toConversationPolicyResponse(),
+        )
+
+    private fun JSONObject.toAudioPolicyResponse(): AudioPolicyResponse =
+        AudioPolicyResponse(
+            silenceTimeoutMs = optInt("silenceTimeoutMs", 3_000),
+            maxUtteranceMs = optInt("maxUtteranceMs", 30_000),
+            uploadMimeType = optString("uploadMimeType", "audio/mp4"),
+            bargeInEnabled = optBoolean("bargeInEnabled", true),
+        )
+
+    private fun JSONObject.toConversationPolicyResponse(): ConversationPolicyResponse =
+        ConversationPolicyResponse(
+            firstGreetingText = optString("firstGreetingText"),
+            noResponsePromptText = optString("noResponsePromptText"),
+            maxDurationClosingText = optString("maxDurationClosingText"),
+            targetTurnCount = optInt("targetTurnCount", 5),
+            maxDurationSeconds = optInt("maxDurationSeconds", 600),
+        )
+
+    private fun requestJson(method: String, path: String, body: JSONObject? = null): JSONObject {
         val connection = openConnection(method, path)
+        if (body != null) {
+            connection.doOutput = true
+            connection.setRequestProperty("Content-Type", "application/json")
+            connection.outputStream.bufferedWriter().use { it.write(body.toString()) }
+        }
         return readResponse(connection)
     }
 
