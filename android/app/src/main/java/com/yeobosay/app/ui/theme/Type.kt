@@ -21,29 +21,29 @@ val Typography = Typography(
     bodyLarge = TextStyle(
         fontFamily = YeoboSayFontFamily,
         fontWeight = FontWeight.Normal,
-        fontSize = 18.sp,
-        lineHeight = 27.sp,
+        fontSize = 20.sp,
+        lineHeight = 29.sp,
         letterSpacing = 0.sp,
     ),
     bodyMedium = TextStyle(
         fontFamily = YeoboSayFontFamily,
         fontWeight = FontWeight.Normal,
-        fontSize = 16.sp,
-        lineHeight = 23.sp,
+        fontSize = 18.sp,
+        lineHeight = 25.sp,
         letterSpacing = 0.sp,
     ),
     labelLarge = TextStyle(
         fontFamily = YeoboSayFontFamily,
         fontWeight = FontWeight.SemiBold,
-        fontSize = 16.sp,
-        lineHeight = 22.sp,
+        fontSize = 18.sp,
+        lineHeight = 24.sp,
         letterSpacing = 0.sp,
     ),
     titleLarge = TextStyle(
         fontFamily = YeoboSayFontFamily,
         fontWeight = FontWeight.Bold,
-        fontSize = 25.sp,
-        lineHeight = 32.sp,
+        fontSize = 27.sp,
+        lineHeight = 34.sp,
         letterSpacing = 0.sp,
     )
 )
