@@ -36,18 +36,34 @@ data class ConversationMessage(
     val riskFlag: Boolean = false,
 )
 
+data class IncomingCallDetails(
+    val invitationId: String,
+    val callerName: String,
+    val message: String,
+    val expiresAt: String,
+)
+
 data class CallFlowState(
     val screenState: CallScreenState = CallScreenState.Home,
     val phase: CallFlowPhase = CallFlowPhase.Idle,
-    val callInvitationId: String? = null,
+    val incomingCall: IncomingCallDetails? = null,
     val callSessionId: String? = null,
     val messages: List<ConversationMessage> = emptyList(),
     val debugStatus: String = "idle",
     val errorText: String? = null,
-)
+) {
+    val callInvitationId: String?
+        get() = incomingCall?.invitationId
+}
 
 sealed interface CallFlowEvent {
-    data class IncomingCallReceived(val invitationId: String) : CallFlowEvent
+    data class IncomingCallReceived(
+        val invitationId: String,
+        val callerName: String,
+        val message: String,
+        val expiresAt: String,
+    ) : CallFlowEvent
+
     data object IncomingCallAccepted : CallFlowEvent
     data object IncomingCallDeclined : CallFlowEvent
     data class SessionCreated(
@@ -72,7 +88,12 @@ object CallStateReducer {
             is CallFlowEvent.IncomingCallReceived -> state.copy(
                 screenState = CallScreenState.Incoming,
                 phase = CallFlowPhase.Ringing,
-                callInvitationId = event.invitationId,
+                incomingCall = IncomingCallDetails(
+                    invitationId = event.invitationId,
+                    callerName = event.callerName,
+                    message = event.message,
+                    expiresAt = event.expiresAt,
+                ),
                 errorText = null,
                 debugStatus = "ringing",
             )
@@ -91,6 +112,7 @@ object CallStateReducer {
             is CallFlowEvent.SessionCreated -> state.copy(
                 screenState = CallScreenState.Active,
                 phase = CallFlowPhase.Listening,
+                incomingCall = null,
                 callSessionId = event.sessionId,
                 messages = event.firstGreetingText
                     ?.takeIf { it.isNotBlank() }
