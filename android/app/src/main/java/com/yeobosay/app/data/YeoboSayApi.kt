@@ -35,6 +35,17 @@ data class VoiceTurnResponse(
     val riskType: String?,
 )
 
+data class CallInvitationResponse(
+    val id: String,
+    val status: String,
+    val callerName: String,
+    val message: String,
+    val createdAt: String,
+    val expiresAt: String,
+    val acceptedAt: String?,
+    val declinedAt: String?,
+)
+
 class YeoboSayApi(
     private val baseUrl: String = "http://10.0.2.2:3000",
 ) {
@@ -62,6 +73,22 @@ class YeoboSayApi(
                     riskType = item.optString("riskType").ifBlank { null },
                 )
             }
+        }
+
+    suspend fun createTestCallInvitation(): CallInvitationResponse = withContext(Dispatchers.IO) {
+        requestJson("POST", "/call-invitations/test").toCallInvitationResponse()
+    }
+
+    suspend fun acceptCallInvitation(callInvitationId: String): CallInvitationResponse =
+        withContext(Dispatchers.IO) {
+            requestJson("POST", "/call-invitations/$callInvitationId/accept")
+                .toCallInvitationResponse()
+        }
+
+    suspend fun declineCallInvitation(callInvitationId: String): CallInvitationResponse =
+        withContext(Dispatchers.IO) {
+            requestJson("POST", "/call-invitations/$callInvitationId/decline")
+                .toCallInvitationResponse()
         }
 
     suspend fun uploadAudioTurn(callSessionId: String, audioFile: File): VoiceTurnResponse =
@@ -98,6 +125,18 @@ class YeoboSayApi(
                 riskType = response.optString("riskType").ifBlank { null },
             )
         }
+
+    private fun JSONObject.toCallInvitationResponse(): CallInvitationResponse =
+        CallInvitationResponse(
+            id = getString("id"),
+            status = getString("status"),
+            callerName = optString("callerName", "YeoboSay"),
+            message = optString("message", "전화가 왔어요."),
+            createdAt = optString("createdAt"),
+            expiresAt = optString("expiresAt"),
+            acceptedAt = optString("acceptedAt").ifBlank { null },
+            declinedAt = optString("declinedAt").ifBlank { null },
+        )
 
     private fun requestJson(method: String, path: String): JSONObject {
         val connection = openConnection(method, path)

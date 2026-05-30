@@ -52,6 +52,9 @@ fun CallRoute(
     CallScreen(
         state = state,
         onStartSession = viewModel::startSession,
+        onRequestTestCall = viewModel::requestTestCall,
+        onAcceptIncomingCall = viewModel::acceptIncomingCall,
+        onDeclineIncomingCall = viewModel::declineIncomingCall,
         onToggleRecording = {
             val isGranted = ContextCompat.checkSelfPermission(
                 context,
@@ -73,6 +76,9 @@ fun CallRoute(
 fun CallScreen(
     state: CallUiState,
     onStartSession: () -> Unit,
+    onRequestTestCall: () -> Unit,
+    onAcceptIncomingCall: () -> Unit,
+    onDeclineIncomingCall: () -> Unit,
     onToggleRecording: () -> Unit,
     onStopPlayback: () -> Unit,
     modifier: Modifier = Modifier,
@@ -95,6 +101,11 @@ fun CallScreen(
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                Text(
+                    text = state.socketStatusText,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.outline,
+                )
                 state.callSessionId?.let {
                     Text(
                         text = "session: $it",
@@ -104,13 +115,35 @@ fun CallScreen(
                 }
             }
 
+            OutlinedButton(
+                onClick = onRequestTestCall,
+                enabled = !state.isRequestingTestCall &&
+                    state.incomingCall == null &&
+                    state.callSessionId == null,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(if (state.isRequestingTestCall) "전화 요청 중" else "테스트 전화 요청")
+            }
+
+            state.incomingCall?.let { incomingCall ->
+                IncomingCallCard(
+                    incomingCall = incomingCall,
+                    isAccepting = state.isAcceptingIncomingCall,
+                    isDeclining = state.isDecliningIncomingCall,
+                    onAccept = onAcceptIncomingCall,
+                    onDecline = onDeclineIncomingCall,
+                )
+            }
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Button(
                     onClick = onStartSession,
-                    enabled = !state.isStartingSession && state.callSessionId == null,
+                    enabled = !state.isStartingSession &&
+                        state.incomingCall == null &&
+                        state.callSessionId == null,
                     modifier = Modifier.weight(1f),
                 ) {
                     Text(if (state.isStartingSession) "시작 중" else "통화 시작")
@@ -169,6 +202,66 @@ fun CallScreen(
 }
 
 @Composable
+private fun IncomingCallCard(
+    incomingCall: IncomingCallUiState,
+    isAccepting: Boolean,
+    isDeclining: Boolean,
+    onAccept: () -> Unit,
+    onDecline: () -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.primaryContainer,
+        ),
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    text = "전화가 왔어요",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                )
+                Text(
+                    text = incomingCall.callerName,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                )
+                Text(
+                    text = incomingCall.message,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                OutlinedButton(
+                    onClick = onDecline,
+                    enabled = !isAccepting && !isDeclining,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(if (isDeclining) "거절 중" else "거절")
+                }
+                Button(
+                    onClick = onAccept,
+                    enabled = !isAccepting && !isDeclining,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(if (isAccepting) "받는 중" else "받기")
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun MessageBubble(message: CallMessage) {
     val isUser = message.role == MessageRole.User
     val label = when (message.role) {
@@ -220,6 +313,7 @@ private fun CallScreenPreview() {
             state = CallUiState(
                 callSessionId = "sample",
                 statusText = "녹음 버튼을 눌러 이어서 말하세요.",
+                socketStatusText = "전화 수신 대기 중입니다.",
                 messages = listOf(
                     CallMessage(MessageRole.Assistant, "안녕하세요. 저는 YeoboSay 말벗이에요."),
                     CallMessage(MessageRole.User, "오늘은 기분이 괜찮아요."),
@@ -227,6 +321,9 @@ private fun CallScreenPreview() {
                 ),
             ),
             onStartSession = {},
+            onRequestTestCall = {},
+            onAcceptIncomingCall = {},
+            onDeclineIncomingCall = {},
             onToggleRecording = {},
             onStopPlayback = {},
         )
