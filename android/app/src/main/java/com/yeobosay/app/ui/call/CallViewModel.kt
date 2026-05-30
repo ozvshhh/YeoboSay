@@ -5,10 +5,12 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.yeobosay.app.data.CallInvitationResponse
 import com.yeobosay.app.data.CallInvitationSocket
+import com.yeobosay.app.data.CallSessionMode
 import com.yeobosay.app.data.IncomingCallEvent
 import com.yeobosay.app.data.YeoboSayApi
 import com.yeobosay.app.voice.AudioPlayer
 import com.yeobosay.app.voice.AudioRecorder
+import com.yeobosay.app.voice.GreetingSpeaker
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -46,6 +48,7 @@ data class CallUiState(
     val incomingCall: IncomingCallUiState? = null,
     val acceptButtonSize: AcceptButtonSize = AcceptButtonSize.Large,
     val callElapsedSeconds: Long = 0L,
+    val isAutoConversation: Boolean = false,
     val isStartingSession: Boolean = false,
     val isRequestingTestCall: Boolean = false,
     val isAcceptingIncomingCall: Boolean = false,
@@ -71,6 +74,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
     private val invitationSocket = CallInvitationSocket()
     private val recorder = AudioRecorder(application.applicationContext)
     private val player = AudioPlayer(application.applicationContext)
+    private val greetingSpeaker = GreetingSpeaker(application.applicationContext)
 
     private val _uiState = MutableStateFlow(CallUiState())
     val uiState: StateFlow<CallUiState> = _uiState.asStateFlow()
@@ -152,11 +156,14 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                     _uiState.update {
                         it.copy(
                             incomingCall = null,
-                            isAcceptingIncomingCall = false,
                             statusText = "통화를 연결합니다.",
                         )
                     }
-                    createCallSession()
+                    createCallSession(
+                        mode = CallSessionMode.AutoConversation,
+                        source = "incoming_call",
+                        callInvitationId = incomingCall.callInvitationId,
+                    )
                 }
                 .onFailure { error ->
                     _uiState.update {
@@ -242,6 +249,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
             maxRecordingJob = null
             if (_uiState.value.isRecording) recorder.cancel()
             player.stop()
+            greetingSpeaker.stop(invokeCallback = false)
 
             _uiState.update {
                 it.copy(
@@ -262,6 +270,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                             expiresAt = null,
                             messages = emptyList(),
                             callElapsedSeconds = 0L,
+                            isAutoConversation = false,
                             isEndingSession = false,
                             statusText = "통화가 종료되었습니다.",
                         )
@@ -279,7 +288,11 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private suspend fun createCallSession() {
+    private suspend fun createCallSession(
+        mode: CallSessionMode = CallSessionMode.ManualRecording,
+        source: String? = null,
+        callInvitationId: String? = null,
+    ) {
         _uiState.update {
             it.copy(
                 isStartingSession = true,
@@ -288,28 +301,59 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
 
-        runCatching { api.createCallSession() }
+        runCatching {
+            api.createCallSession(
+                mode = mode,
+                source = source,
+                callInvitationId = callInvitationId,
+            )
+        }
             .onSuccess { session ->
+                val isAutoConversation = session.mode == CallSessionMode.AutoConversation.apiValue
+                val greetingText = session.conversationPolicy
+                    ?.firstGreetingText
+                    ?.takeIf { it.isNotBlank() }
+                    ?: DEFAULT_GREETING
+
                 startCallTimer()
                 _uiState.update {
                     it.copy(
                         callSessionId = session.id,
                         expiresAt = session.expiresAt,
+                        isAutoConversation = isAutoConversation,
                         isStartingSession = false,
-                        statusText = "녹음 버튼을 눌러 대화를 시작하세요.",
+                        isAcceptingIncomingCall = false,
+                        statusText = if (isAutoConversation) {
+                            "AI가 먼저 인사하고 있어요."
+                        } else {
+                            "녹음 버튼을 눌러 대화를 시작하세요."
+                        },
+                        isPlaying = isAutoConversation,
                         messages = listOf(
                             CallMessage(
                                 role = MessageRole.Assistant,
-                                text = DEFAULT_GREETING,
+                                text = greetingText,
                             ),
                         ),
                     )
+                }
+
+                if (isAutoConversation) {
+                    greetingSpeaker.speak(greetingText) {
+                        _uiState.update {
+                            it.copy(
+                                isPlaying = false,
+                                statusText = "말씀을 듣고 있어요.",
+                            )
+                        }
+                    }
                 }
             }
             .onFailure { error ->
                 _uiState.update {
                     it.copy(
                         isStartingSession = false,
+                        isAcceptingIncomingCall = false,
                         statusText = "세션 생성 실패",
                         errorText = error.message ?: "세션을 만들 수 없습니다.",
                     )
@@ -457,6 +501,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
 
     fun stopPlayback() {
         player.stop()
+        greetingSpeaker.stop(invokeCallback = false)
         _uiState.update { it.copy(isPlaying = false, statusText = "재생을 중지했습니다.") }
     }
 
@@ -466,6 +511,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
         maxRecordingJob?.cancel()
         recorder.cancel()
         player.stop()
+        greetingSpeaker.shutdown()
         super.onCleared()
     }
 }

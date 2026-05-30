@@ -616,6 +616,7 @@ private fun ActiveCallScreen(
                 isRecording = state.isRecording,
                 isUploading = state.isUploading,
                 isPlaying = state.isPlaying,
+                isAutoConversation = state.isAutoConversation,
                 isEndingSession = state.isEndingSession,
                 onToggleSpeaker = { isSpeakerOn = !isSpeakerOn },
                 onToggleRecording = onToggleRecording,
@@ -708,6 +709,7 @@ private fun ActiveCallControls(
     isRecording: Boolean,
     isUploading: Boolean,
     isPlaying: Boolean,
+    isAutoConversation: Boolean,
     isEndingSession: Boolean,
     onToggleSpeaker: () -> Unit,
     onToggleRecording: () -> Unit,
@@ -747,6 +749,8 @@ private fun ActiveCallControls(
             text = when {
                 isRecording -> "말씀을 듣고 있어요."
                 isUploading -> "답변을 준비하고 있어요."
+                isAutoConversation && isPlaying -> "AI가 먼저 인사하고 있어요."
+                isAutoConversation -> "말씀하시면 자동으로 들을 준비를 할게요."
                 else -> "녹음 버튼을 눌러 말씀해 주세요."
             },
             color = OneUiInk.copy(alpha = 0.58f),
