@@ -3,6 +3,9 @@ package com.yeobosay.app.ui.call
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.yeobosay.app.data.CallInvitationResponse
+import com.yeobosay.app.data.CallInvitationSocket
+import com.yeobosay.app.data.IncomingCallEvent
 import com.yeobosay.app.data.YeoboSayApi
 import com.yeobosay.app.voice.AudioPlayer
 import com.yeobosay.app.voice.AudioRecorder
@@ -31,20 +34,41 @@ enum class MessageRole {
     System,
 }
 
+enum class AcceptButtonSize {
+    Normal,
+    Large,
+}
+
 data class CallUiState(
     val callSessionId: String? = null,
     val expiresAt: String? = null,
     val messages: List<CallMessage> = emptyList(),
+    val incomingCall: IncomingCallUiState? = null,
+    val acceptButtonSize: AcceptButtonSize = AcceptButtonSize.Large,
+    val callElapsedSeconds: Long = 0L,
     val isStartingSession: Boolean = false,
+    val isRequestingTestCall: Boolean = false,
+    val isAcceptingIncomingCall: Boolean = false,
+    val isDecliningIncomingCall: Boolean = false,
+    val isEndingSession: Boolean = false,
     val isRecording: Boolean = false,
     val isUploading: Boolean = false,
     val isPlaying: Boolean = false,
     val statusText: String = "통화 세션을 시작해 주세요.",
+    val socketStatusText: String = "전화 수신 서버에 연결 중입니다.",
     val errorText: String? = null,
+)
+
+data class IncomingCallUiState(
+    val callInvitationId: String,
+    val callerName: String,
+    val message: String,
+    val expiresAt: String,
 )
 
 class CallViewModel(application: Application) : AndroidViewModel(application) {
     private val api = YeoboSayApi()
+    private val invitationSocket = CallInvitationSocket()
     private val recorder = AudioRecorder(application.applicationContext)
     private val player = AudioPlayer(application.applicationContext)
 
@@ -53,46 +77,262 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
 
     private var recordingStartedAt: Long = 0L
     private var maxRecordingJob: Job? = null
+    private var callTimerJob: Job? = null
+    private var callStartedAtMillis: Long = 0L
+
+    init {
+        connectCallInvitationSocket()
+    }
+
+    fun setAcceptButtonSize(size: AcceptButtonSize) {
+        _uiState.update { it.copy(acceptButtonSize = size) }
+    }
 
     fun startSession() {
         if (_uiState.value.isStartingSession) return
 
         viewModelScope.launch {
+            createCallSession()
+        }
+    }
+
+    fun requestTestCall() {
+        val state = _uiState.value
+        if (state.isRequestingTestCall || state.incomingCall != null || state.callSessionId != null) {
+            return
+        }
+
+        viewModelScope.launch {
             _uiState.update {
                 it.copy(
-                    isStartingSession = true,
+                    isRequestingTestCall = true,
                     errorText = null,
-                    statusText = "세션을 만드는 중입니다.",
+                    statusText = "테스트 전화를 요청하는 중입니다.",
                 )
             }
 
-            runCatching { api.createCallSession() }
-                .onSuccess { session ->
+            runCatching { api.createTestCallInvitation() }
+                .onSuccess { invitation ->
                     _uiState.update {
                         it.copy(
-                            callSessionId = session.id,
-                            expiresAt = session.expiresAt,
-                            isStartingSession = false,
-                            statusText = "녹음 버튼을 눌러 대화를 시작하세요.",
-                            messages = listOf(
-                                CallMessage(
-                                    role = MessageRole.Assistant,
-                                    text = DEFAULT_GREETING,
-                                ),
-                            ),
+                            incomingCall = invitation.toIncomingCallUiState(),
+                            isRequestingTestCall = false,
+                            statusText = "전화 요청을 보냈습니다.",
+                            errorText = null,
                         )
                     }
                 }
                 .onFailure { error ->
                     _uiState.update {
                         it.copy(
-                            isStartingSession = false,
-                            statusText = "세션 생성 실패",
-                            errorText = error.message ?: "세션을 만들 수 없습니다.",
+                            isRequestingTestCall = false,
+                            statusText = "전화 요청 실패",
+                            errorText = error.message ?: "테스트 전화를 요청할 수 없습니다.",
                         )
                     }
                 }
         }
+    }
+
+    fun acceptIncomingCall() {
+        val incomingCall = _uiState.value.incomingCall ?: return
+        if (_uiState.value.isAcceptingIncomingCall) return
+
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    isAcceptingIncomingCall = true,
+                    errorText = null,
+                    statusText = "전화를 받는 중입니다.",
+                )
+            }
+
+            runCatching { api.acceptCallInvitation(incomingCall.callInvitationId) }
+                .onSuccess {
+                    _uiState.update {
+                        it.copy(
+                            incomingCall = null,
+                            isAcceptingIncomingCall = false,
+                            statusText = "통화를 연결합니다.",
+                        )
+                    }
+                    createCallSession()
+                }
+                .onFailure { error ->
+                    _uiState.update {
+                        it.copy(
+                            isAcceptingIncomingCall = false,
+                            statusText = "전화 수락 실패",
+                            errorText = error.message ?: "전화를 받을 수 없습니다.",
+                        )
+                    }
+                }
+        }
+    }
+
+    fun declineIncomingCall() {
+        val incomingCall = _uiState.value.incomingCall ?: return
+        if (_uiState.value.isDecliningIncomingCall) return
+
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    isDecliningIncomingCall = true,
+                    errorText = null,
+                    statusText = "전화를 거절하는 중입니다.",
+                )
+            }
+
+            runCatching { api.declineCallInvitation(incomingCall.callInvitationId) }
+                .onSuccess {
+                    _uiState.update {
+                        it.copy(
+                            incomingCall = null,
+                            isDecliningIncomingCall = false,
+                            statusText = "전화를 거절했습니다.",
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    _uiState.update {
+                        it.copy(
+                            isDecliningIncomingCall = false,
+                            statusText = "전화 거절 실패",
+                            errorText = error.message ?: "전화를 거절할 수 없습니다.",
+                        )
+                    }
+                }
+        }
+    }
+
+    private fun connectCallInvitationSocket() {
+        invitationSocket.connect(
+            onConnected = {
+                _uiState.update { it.copy(socketStatusText = "전화 수신 대기 중입니다.") }
+            },
+            onDisconnected = {
+                _uiState.update { it.copy(socketStatusText = "전화 수신 연결이 끊겼습니다.") }
+            },
+            onIncomingCall = { event ->
+                _uiState.update {
+                    if (it.callSessionId != null) {
+                        it.copy(socketStatusText = "통화 중이라 새 전화를 표시하지 않았습니다.")
+                    } else {
+                        it.copy(
+                            incomingCall = event.toIncomingCallUiState(),
+                            socketStatusText = "전화가 도착했습니다.",
+                            statusText = "전화가 왔어요.",
+                            errorText = null,
+                        )
+                    }
+                }
+            },
+            onError = { message ->
+                _uiState.update { it.copy(socketStatusText = message) }
+            },
+        )
+    }
+
+    fun endSession() {
+        val sessionId = _uiState.value.callSessionId ?: return
+        if (_uiState.value.isEndingSession) return
+
+        viewModelScope.launch {
+            maxRecordingJob?.cancel()
+            maxRecordingJob = null
+            if (_uiState.value.isRecording) recorder.cancel()
+            player.stop()
+
+            _uiState.update {
+                it.copy(
+                    isEndingSession = true,
+                    isRecording = false,
+                    isPlaying = false,
+                    errorText = null,
+                    statusText = "통화를 종료하는 중입니다.",
+                )
+            }
+
+            runCatching { api.endCallSession(sessionId) }
+                .onSuccess {
+                    stopCallTimer()
+                    _uiState.update {
+                        it.copy(
+                            callSessionId = null,
+                            expiresAt = null,
+                            messages = emptyList(),
+                            callElapsedSeconds = 0L,
+                            isEndingSession = false,
+                            statusText = "통화가 종료되었습니다.",
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    _uiState.update {
+                        it.copy(
+                            isEndingSession = false,
+                            statusText = "통화 종료 실패",
+                            errorText = error.message ?: "통화를 종료할 수 없습니다.",
+                        )
+                    }
+                }
+        }
+    }
+
+    private suspend fun createCallSession() {
+        _uiState.update {
+            it.copy(
+                isStartingSession = true,
+                errorText = null,
+                statusText = "세션을 만드는 중입니다.",
+            )
+        }
+
+        runCatching { api.createCallSession() }
+            .onSuccess { session ->
+                startCallTimer()
+                _uiState.update {
+                    it.copy(
+                        callSessionId = session.id,
+                        expiresAt = session.expiresAt,
+                        isStartingSession = false,
+                        statusText = "녹음 버튼을 눌러 대화를 시작하세요.",
+                        messages = listOf(
+                            CallMessage(
+                                role = MessageRole.Assistant,
+                                text = DEFAULT_GREETING,
+                            ),
+                        ),
+                    )
+                }
+            }
+            .onFailure { error ->
+                _uiState.update {
+                    it.copy(
+                        isStartingSession = false,
+                        statusText = "세션 생성 실패",
+                        errorText = error.message ?: "세션을 만들 수 없습니다.",
+                    )
+                }
+            }
+    }
+
+    private fun startCallTimer() {
+        callStartedAtMillis = System.currentTimeMillis()
+        callTimerJob?.cancel()
+        callTimerJob = viewModelScope.launch {
+            while (true) {
+                val elapsedSeconds = (System.currentTimeMillis() - callStartedAtMillis) / 1_000L
+                _uiState.update { it.copy(callElapsedSeconds = elapsedSeconds) }
+                delay(1_000L)
+            }
+        }
+    }
+
+    private fun stopCallTimer() {
+        callTimerJob?.cancel()
+        callTimerJob = null
+        callStartedAtMillis = 0L
     }
 
     fun toggleRecording() {
@@ -221,8 +461,27 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
+        invitationSocket.disconnect()
+        callTimerJob?.cancel()
+        maxRecordingJob?.cancel()
         recorder.cancel()
         player.stop()
         super.onCleared()
     }
 }
+
+private fun IncomingCallEvent.toIncomingCallUiState(): IncomingCallUiState =
+    IncomingCallUiState(
+        callInvitationId = callInvitationId,
+        callerName = callerName,
+        message = message,
+        expiresAt = expiresAt,
+    )
+
+private fun CallInvitationResponse.toIncomingCallUiState(): IncomingCallUiState =
+    IncomingCallUiState(
+        callInvitationId = id,
+        callerName = callerName,
+        message = message,
+        expiresAt = expiresAt,
+    )
