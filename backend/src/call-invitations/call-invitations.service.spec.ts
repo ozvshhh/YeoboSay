@@ -87,6 +87,19 @@ describe('CallInvitationsService', () => {
     service.accept(invitation.id);
 
     expect(() => service.decline(invitation.id)).toThrow(ConflictException);
+    expect(() => service.decline(invitation.id)).toThrow(
+      'Call invitation is accepted.',
+    );
+  });
+
+  it('throws conflict when accepting a declined invitation', () => {
+    const invitation = service.createTestInvitation();
+    service.decline(invitation.id);
+
+    expect(() => service.accept(invitation.id)).toThrow(ConflictException);
+    expect(() => service.accept(invitation.id)).toThrow(
+      'Call invitation is declined.',
+    );
   });
 
   it('throws conflict when an invitation is expired', () => {
@@ -95,5 +108,19 @@ describe('CallInvitationsService', () => {
     jest.setSystemTime(new Date('2026-05-28T05:00:31.000Z'));
 
     expect(() => service.accept(invitation.id)).toThrow(ConflictException);
+    expect(() => service.accept(invitation.id)).toThrow(
+      'Call invitation is expired.',
+    );
+  });
+
+  it('throws conflict when declining an expired invitation', () => {
+    const invitation = service.createTestInvitation();
+
+    jest.setSystemTime(new Date('2026-05-28T05:00:31.000Z'));
+
+    expect(() => service.decline(invitation.id)).toThrow(ConflictException);
+    expect(() => service.decline(invitation.id)).toThrow(
+      'Call invitation is expired.',
+    );
   });
 });

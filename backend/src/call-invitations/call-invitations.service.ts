@@ -83,7 +83,9 @@ export class CallInvitationsService {
 
   private ensureRinging(invitation: CallInvitationRecord): void {
     if (invitation.status !== CallInvitationStatus.RINGING) {
-      throw new ConflictException('Call invitation is not ringing.');
+      throw new ConflictException(
+        `Call invitation is ${invitation.status.toLowerCase()}.`,
+      );
     }
   }
 
