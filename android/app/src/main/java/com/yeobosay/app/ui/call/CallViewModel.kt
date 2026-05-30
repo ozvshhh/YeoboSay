@@ -34,15 +34,23 @@ enum class MessageRole {
     System,
 }
 
+enum class AcceptButtonSize {
+    Normal,
+    Large,
+}
+
 data class CallUiState(
     val callSessionId: String? = null,
     val expiresAt: String? = null,
     val messages: List<CallMessage> = emptyList(),
     val incomingCall: IncomingCallUiState? = null,
+    val acceptButtonSize: AcceptButtonSize = AcceptButtonSize.Large,
+    val callElapsedSeconds: Long = 0L,
     val isStartingSession: Boolean = false,
     val isRequestingTestCall: Boolean = false,
     val isAcceptingIncomingCall: Boolean = false,
     val isDecliningIncomingCall: Boolean = false,
+    val isEndingSession: Boolean = false,
     val isRecording: Boolean = false,
     val isUploading: Boolean = false,
     val isPlaying: Boolean = false,
@@ -69,9 +77,15 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
 
     private var recordingStartedAt: Long = 0L
     private var maxRecordingJob: Job? = null
+    private var callTimerJob: Job? = null
+    private var callStartedAtMillis: Long = 0L
 
     init {
         connectCallInvitationSocket()
+    }
+
+    fun setAcceptButtonSize(size: AcceptButtonSize) {
+        _uiState.update { it.copy(acceptButtonSize = size) }
     }
 
     fun startSession() {
@@ -219,6 +233,52 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
+    fun endSession() {
+        val sessionId = _uiState.value.callSessionId ?: return
+        if (_uiState.value.isEndingSession) return
+
+        viewModelScope.launch {
+            maxRecordingJob?.cancel()
+            maxRecordingJob = null
+            if (_uiState.value.isRecording) recorder.cancel()
+            player.stop()
+
+            _uiState.update {
+                it.copy(
+                    isEndingSession = true,
+                    isRecording = false,
+                    isPlaying = false,
+                    errorText = null,
+                    statusText = "통화를 종료하는 중입니다.",
+                )
+            }
+
+            runCatching { api.endCallSession(sessionId) }
+                .onSuccess {
+                    stopCallTimer()
+                    _uiState.update {
+                        it.copy(
+                            callSessionId = null,
+                            expiresAt = null,
+                            messages = emptyList(),
+                            callElapsedSeconds = 0L,
+                            isEndingSession = false,
+                            statusText = "통화가 종료되었습니다.",
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    _uiState.update {
+                        it.copy(
+                            isEndingSession = false,
+                            statusText = "통화 종료 실패",
+                            errorText = error.message ?: "통화를 종료할 수 없습니다.",
+                        )
+                    }
+                }
+        }
+    }
+
     private suspend fun createCallSession() {
         _uiState.update {
             it.copy(
@@ -230,6 +290,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
 
         runCatching { api.createCallSession() }
             .onSuccess { session ->
+                startCallTimer()
                 _uiState.update {
                     it.copy(
                         callSessionId = session.id,
@@ -254,6 +315,24 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
             }
+    }
+
+    private fun startCallTimer() {
+        callStartedAtMillis = System.currentTimeMillis()
+        callTimerJob?.cancel()
+        callTimerJob = viewModelScope.launch {
+            while (true) {
+                val elapsedSeconds = (System.currentTimeMillis() - callStartedAtMillis) / 1_000L
+                _uiState.update { it.copy(callElapsedSeconds = elapsedSeconds) }
+                delay(1_000L)
+            }
+        }
+    }
+
+    private fun stopCallTimer() {
+        callTimerJob?.cancel()
+        callTimerJob = null
+        callStartedAtMillis = 0L
     }
 
     fun toggleRecording() {
@@ -383,6 +462,8 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         invitationSocket.disconnect()
+        callTimerJob?.cancel()
+        maxRecordingJob?.cancel()
         recorder.cancel()
         player.stop()
         super.onCleared()

@@ -75,6 +75,16 @@ class YeoboSayApi(
             }
         }
 
+    suspend fun endCallSession(callSessionId: String): CallSessionResponse =
+        withContext(Dispatchers.IO) {
+            val response = requestJson("POST", "/call-sessions/$callSessionId/end")
+            CallSessionResponse(
+                id = response.getString("id"),
+                status = response.getString("status"),
+                expiresAt = response.getString("expiresAt"),
+            )
+        }
+
     suspend fun createTestCallInvitation(): CallInvitationResponse = withContext(Dispatchers.IO) {
         requestJson("POST", "/call-invitations/test").toCallInvitationResponse()
     }
