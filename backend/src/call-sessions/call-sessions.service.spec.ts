@@ -57,7 +57,9 @@ describe('CallSessionsService', () => {
     };
     conversationTurn: {
       create: jest.Mock;
+      findFirst: jest.Mock;
       findMany: jest.Mock;
+      update: jest.Mock;
     };
   };
   let openAiService: {
@@ -88,7 +90,9 @@ describe('CallSessionsService', () => {
       },
       conversationTurn: {
         create: jest.fn(),
+        findFirst: jest.fn(),
         findMany: jest.fn(),
+        update: jest.fn(),
       },
     };
     openAiService = {
@@ -472,6 +476,204 @@ describe('CallSessionsService', () => {
         originalname: 'turn.m4a',
       } as Express.Multer.File),
     ).rejects.toBeInstanceOf(BadGatewayException);
+  });
+
+  it('stores an automatic turn with clientTurnId and returns a mock response', async () => {
+    const audio = {
+      buffer: Buffer.from('audio'),
+      mimetype: 'audio/mp4',
+      originalname: 'auto-turn.m4a',
+    } as Express.Multer.File;
+    const userTurn = {
+      id: 'turn-user-1',
+      callSessionId: 'session-1',
+      clientTurnId: 'android-turn-1',
+      role: ConversationRole.USER,
+      text: '자동 발화가 접수됐어요.',
+      status: ConversationTurnStatus.UPLOADED,
+      conversationStep: ConversationStep.WELLBEING,
+      bargeIn: false,
+      failed: false,
+      riskFlag: false,
+      riskType: null,
+      createdAt: now,
+      completedAt: null,
+      errorCode: null,
+    };
+    const completedUserTurn = {
+      ...userTurn,
+      status: ConversationTurnStatus.COMPLETED,
+      completedAt: now,
+    };
+    const assistantTurn = {
+      id: 'turn-assistant-1',
+      callSessionId: 'session-1',
+      clientTurnId: null,
+      role: ConversationRole.ASSISTANT,
+      text: '말씀을 잘 받았어요. 다음 단계에서 실제 AI 답변으로 연결할게요.',
+      status: ConversationTurnStatus.COMPLETED,
+      conversationStep: ConversationStep.WELLBEING,
+      bargeIn: false,
+      failed: false,
+      riskFlag: false,
+      riskType: null,
+      createdAt: now,
+      completedAt: now,
+      errorCode: null,
+    };
+
+    prisma.callSession.findUnique.mockResolvedValue({
+      ...baseSession,
+      mode: CallSessionMode.AUTO_CONVERSATION,
+      status: CallSessionStatus.WAITING_FOR_USER,
+      currentStep: ConversationStep.WELLBEING,
+    });
+    prisma.conversationTurn.findFirst.mockResolvedValue(null);
+    prisma.conversationTurn.create
+      .mockResolvedValueOnce(userTurn)
+      .mockResolvedValueOnce(assistantTurn);
+    prisma.conversationTurn.update.mockResolvedValue(completedUserTurn);
+    prisma.callSession.update.mockResolvedValue({});
+
+    await expect(
+      service.processAutoAudioTurn(
+        'session-1',
+        {
+          clientTurnId: 'android-turn-1',
+          mode: 'auto_conversation',
+          conversationStep: 'wellbeing',
+          bargeIn: 'false',
+        },
+        audio,
+      ),
+    ).resolves.toEqual({
+      turnId: 'turn-user-1',
+      clientTurnId: 'android-turn-1',
+      sessionId: 'session-1',
+      userText: '자동 발화가 접수됐어요.',
+      assistantText:
+        '말씀을 잘 받았어요. 다음 단계에서 실제 AI 답변으로 연결할게요.',
+      audioMimeType: null,
+      audioBase64: null,
+      conversationStep: 'wellbeing',
+      nextAction: 'play_audio',
+      failed: false,
+      riskFlag: false,
+      riskType: null,
+    });
+    expect(prisma.conversationTurn.create).toHaveBeenCalledWith({
+      data: {
+        callSessionId: 'session-1',
+        clientTurnId: 'android-turn-1',
+        role: ConversationRole.USER,
+        text: '자동 발화가 접수됐어요.',
+        status: ConversationTurnStatus.UPLOADED,
+        conversationStep: ConversationStep.WELLBEING,
+        bargeIn: false,
+      },
+    });
+    expect(prisma.callSession.update).toHaveBeenLastCalledWith({
+      where: { id: 'session-1' },
+      data: {
+        status: CallSessionStatus.AI_SPEAKING,
+        currentStep: ConversationStep.WELLBEING,
+        turnCount: { increment: 1 },
+      },
+    });
+  });
+
+  it('returns a completed automatic turn for duplicate clientTurnId', async () => {
+    const audio = {
+      buffer: Buffer.from('audio'),
+      mimetype: 'audio/mp4',
+      originalname: 'auto-turn.m4a',
+    } as Express.Multer.File;
+    const existingTurn = {
+      id: 'turn-user-1',
+      callSessionId: 'session-1',
+      clientTurnId: 'android-turn-1',
+      role: ConversationRole.USER,
+      text: '자동 발화가 접수됐어요.',
+      status: ConversationTurnStatus.COMPLETED,
+      conversationStep: ConversationStep.WELLBEING,
+      bargeIn: false,
+      failed: false,
+      riskFlag: false,
+      riskType: null,
+      createdAt: now,
+      completedAt: now,
+      errorCode: null,
+    };
+    const assistantTurn = {
+      ...existingTurn,
+      id: 'turn-assistant-1',
+      clientTurnId: null,
+      role: ConversationRole.ASSISTANT,
+      text: '이미 처리된 답변입니다.',
+    };
+
+    prisma.callSession.findUnique.mockResolvedValue({
+      ...baseSession,
+      mode: CallSessionMode.AUTO_CONVERSATION,
+      status: CallSessionStatus.WAITING_FOR_USER,
+    });
+    prisma.conversationTurn.findFirst
+      .mockResolvedValueOnce(existingTurn)
+      .mockResolvedValueOnce(assistantTurn);
+
+    await expect(
+      service.processAutoAudioTurn(
+        'session-1',
+        { clientTurnId: 'android-turn-1', mode: 'auto_conversation' },
+        audio,
+      ),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        turnId: 'turn-user-1',
+        clientTurnId: 'android-turn-1',
+        assistantText: '이미 처리된 답변입니다.',
+        nextAction: 'play_audio',
+      }),
+    );
+    expect(prisma.conversationTurn.create).not.toHaveBeenCalled();
+  });
+
+  it('throws conflict when duplicate automatic turn is still processing', async () => {
+    const audio = {
+      buffer: Buffer.from('audio'),
+      mimetype: 'audio/mp4',
+      originalname: 'auto-turn.m4a',
+    } as Express.Multer.File;
+
+    prisma.callSession.findUnique.mockResolvedValue({
+      ...baseSession,
+      mode: CallSessionMode.AUTO_CONVERSATION,
+      status: CallSessionStatus.WAITING_FOR_USER,
+    });
+    prisma.conversationTurn.findFirst.mockResolvedValue({
+      id: 'turn-user-1',
+      callSessionId: 'session-1',
+      clientTurnId: 'android-turn-1',
+      role: ConversationRole.USER,
+      text: '자동 발화가 접수됐어요.',
+      status: ConversationTurnStatus.TRANSCRIBING,
+      conversationStep: null,
+      bargeIn: false,
+      failed: false,
+      riskFlag: false,
+      riskType: null,
+      createdAt: now,
+      completedAt: null,
+      errorCode: null,
+    });
+
+    await expect(
+      service.processAutoAudioTurn(
+        'session-1',
+        { clientTurnId: 'android-turn-1', mode: 'auto_conversation' },
+        audio,
+      ),
+    ).rejects.toBeInstanceOf(ConflictException);
   });
 
   it('ends an active call session', async () => {
