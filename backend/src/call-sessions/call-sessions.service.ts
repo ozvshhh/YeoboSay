@@ -56,8 +56,8 @@ const AUTO_CONVERSATION_FIRST_GREETING =
 const AUTO_CONVERSATION_NO_RESPONSE_PROMPT = '여보세요? 제 말 들리세요?';
 const AUTO_CONVERSATION_MAX_DURATION_CLOSING =
   '어르신 아쉽지만 오늘 통화는 여기까지에요.';
-const AUTO_TURN_MOCK_ASSISTANT_TEXT =
-  '말씀을 잘 받았어요. 다음 단계에서 실제 AI 답변으로 연결할게요.';
+const AUTO_CONVERSATION_DEFAULT_ASSISTANT_TEXT =
+  '말씀을 잘 받았어요. 조금 더 이야기해 볼게요.';
 const TERMINAL_TURN_STATUSES = new Set<ConversationTurnStatus>([
   ConversationTurnStatus.COMPLETED,
   ConversationTurnStatus.FAILED_STT,
@@ -500,6 +500,118 @@ export class CallSessionsService {
       },
     });
 
+    await this.prisma.conversationTurn.update({
+      where: { id: transcribedUserTurn.id },
+      data: { status: ConversationTurnStatus.RESPONDING },
+    });
+
+    const assistantConversationStep =
+      this.nextConversationStep(conversationStep ?? session.currentStep) ??
+      conversationStep ??
+      session.currentStep ??
+      ConversationStep.FREE_TALK;
+    const messages = await this.buildAssistantMessages(id);
+    let assistantText: string;
+
+    try {
+      assistantText = await this.openAiService.generateAssistantText(
+        messages,
+        this.buildAutoConversationInstructions(
+          conversationStep ?? session.currentStep,
+          assistantConversationStep,
+          userText,
+        ),
+      );
+    } catch (error) {
+      this.logger.error(
+        `Automatic assistant text generation failed: callSessionId=${id} clientTurnId=${dto.clientTurnId}`,
+        error instanceof Error ? error.stack : undefined,
+      );
+
+      const failedUserTurn = await this.prisma.conversationTurn.update({
+        where: { id: transcribedUserTurn.id },
+        data: {
+          status: ConversationTurnStatus.FAILED_LLM,
+          failed: true,
+          errorCode: 'LLM_FAILED',
+          completedAt: new Date(),
+        },
+      });
+      const failureTurn = await this.createAutoAssistantTurn({
+        callSessionId: id,
+        text: ASSISTANT_FAILURE_MESSAGE,
+        conversationStep: assistantConversationStep,
+        failed: true,
+      });
+
+      await this.prisma.callSession.update({
+        where: { id },
+        data: { status: CallSessionStatus.WAITING_FOR_USER },
+      });
+
+      this.demoLogger.assistantGenerationFailed(id, error);
+      this.demoLogger.assistantTextGenerated(
+        id,
+        ASSISTANT_FAILURE_MESSAGE,
+        true,
+      );
+
+      return this.toAutoVoiceTurnResponse(failedUserTurn, failureTurn, {
+        nextAction: 'listen_again',
+        failed: true,
+      });
+    }
+
+    await this.prisma.conversationTurn.update({
+      where: { id: transcribedUserTurn.id },
+      data: { status: ConversationTurnStatus.RESPONDED },
+    });
+
+    await this.prisma.conversationTurn.update({
+      where: { id: transcribedUserTurn.id },
+      data: { status: ConversationTurnStatus.SYNTHESIZING },
+    });
+
+    let assistantAudio: Buffer;
+
+    try {
+      assistantAudio = await this.openAiService.synthesizeSpeech(assistantText);
+    } catch (error) {
+      this.logger.error(
+        `Automatic assistant speech generation failed: callSessionId=${id} clientTurnId=${dto.clientTurnId}`,
+        error instanceof Error ? error.stack : undefined,
+      );
+
+      const failedUserTurn = await this.prisma.conversationTurn.update({
+        where: { id: transcribedUserTurn.id },
+        data: {
+          status: ConversationTurnStatus.FAILED_TTS,
+          failed: true,
+          errorCode: 'TTS_FAILED',
+          completedAt: new Date(),
+        },
+      });
+      const failedAssistantTurn = await this.createAutoAssistantTurn({
+        callSessionId: id,
+        text: assistantText,
+        conversationStep: assistantConversationStep,
+        failed: true,
+      });
+
+      await this.prisma.callSession.update({
+        where: { id },
+        data: { status: CallSessionStatus.WAITING_FOR_USER },
+      });
+
+      this.demoLogger.assistantGenerationFailed(id, error);
+      this.demoLogger.assistantTextGenerated(id, assistantText, true);
+
+      return this.toAutoVoiceTurnResponse(failedUserTurn, failedAssistantTurn, {
+        nextAction: 'listen_again',
+        failed: true,
+      });
+    }
+
     const completedUserTurn = await this.prisma.conversationTurn.update({
       where: { id: transcribedUserTurn.id },
       data: {
@@ -508,35 +620,32 @@ export class CallSessionsService {
       },
     });
 
-    const assistantTurn = await this.prisma.conversationTurn.create({
-      data: {
-        callSessionId: id,
-        role: ConversationRole.ASSISTANT,
-        text: AUTO_TURN_MOCK_ASSISTANT_TEXT,
-        status: ConversationTurnStatus.COMPLETED,
-        conversationStep,
-        completedAt: new Date(),
-      },
+    const assistantTurn = await this.createAutoAssistantTurn({
+      callSessionId: id,
+      text: assistantText,
+      conversationStep: assistantConversationStep,
+      failed: false,
     });
 
     await this.prisma.callSession.update({
       where: { id },
       data: {
         status: CallSessionStatus.AI_SPEAKING,
-        currentStep: conversationStep ?? session.currentStep,
+        currentStep: assistantConversationStep,
         turnCount: { increment: 1 },
         riskFlag: riskFlag ? true : undefined,
         riskType: riskType ?? undefined,
       },
     });
 
-    this.demoLogger.assistantTextGenerated(
-      id,
-      AUTO_TURN_MOCK_ASSISTANT_TEXT,
-      false,
-    );
+    this.demoLogger.assistantTextGenerated(id, assistantText, false);
 
-    return this.toAutoVoiceTurnResponse(completedUserTurn, assistantTurn);
+    return this.toAutoVoiceTurnResponse(completedUserTurn, assistantTurn, {
+      audioMimeType: 'audio/mpeg',
+      audioBase64: assistantAudio.toString('base64'),
+      nextAction: 'play_audio',
+      failed: false,
+    });
   }
 
   async end(id: string): Promise<CallSessionResponseDto> {
@@ -704,17 +813,124 @@ export class CallSessionsService {
     conversationStep: ConversationStep | undefined,
     failed: boolean,
   ): Promise<ConversationTurn> {
+    return this.createAutoAssistantTurn({
+      callSessionId,
+      text: AUTO_CONVERSATION_RETRY_PROMPT,
+      conversationStep,
+      failed,
+    });
+  }
+
+  private async createAutoAssistantTurn(params: {
+    callSessionId: string;
+    text: string;
+    conversationStep: ConversationStep | undefined;
+    failed: boolean;
+  }): Promise<ConversationTurn> {
     return this.prisma.conversationTurn.create({
       data: {
-        callSessionId,
+        callSessionId: params.callSessionId,
         role: ConversationRole.ASSISTANT,
-        text: AUTO_CONVERSATION_RETRY_PROMPT,
+        text: params.text,
         status: ConversationTurnStatus.COMPLETED,
-        conversationStep,
-        failed,
+        conversationStep: params.conversationStep,
+        failed: params.failed,
         completedAt: new Date(),
       },
     });
+  }
+
+  private nextConversationStep(
+    currentStep?: ConversationStep | null,
+  ): ConversationStep {
+    switch (currentStep) {
+      case ConversationStep.GREETING:
+        return ConversationStep.WELLBEING;
+      case ConversationStep.WELLBEING:
+        return ConversationStep.MEAL;
+      case ConversationStep.MEAL:
+        return ConversationStep.HEALTH;
+      case ConversationStep.HEALTH:
+        return ConversationStep.MEDICATION;
+      case ConversationStep.MEDICATION:
+        return ConversationStep.SLEEP;
+      case ConversationStep.SLEEP:
+        return ConversationStep.SCHEDULE;
+      case ConversationStep.SCHEDULE:
+        return ConversationStep.MOOD;
+      case ConversationStep.MOOD:
+      case ConversationStep.FREE_TALK:
+      case ConversationStep.CLOSING:
+      default:
+        return ConversationStep.FREE_TALK;
+    }
+  }
+
+  private buildAutoConversationInstructions(
+    userStep: ConversationStep | null | undefined,
+    assistantStep: ConversationStep,
+    userText: string,
+  ): string {
+    return [
+      'This is an automatic phone conversation with an elderly Korean user.',
+      'Speak like a polite, friendly young male companion.',
+      'Use simple Korean, large-print-caption friendly sentences, and no markdown.',
+      'If the answer was too short to understand, ask once more naturally. If it was enough, move to the next care-check topic.',
+      `The user just answered the ${this.describeConversationStep(userStep)} step: "${userText}".`,
+      `Your next care-check step is ${this.describeConversationStep(assistantStep)}.`,
+      `Ask or respond using this focus: ${this.getConversationStepPrompt(assistantStep)}`,
+    ].join(' ');
+  }
+
+  private describeConversationStep(step?: ConversationStep | null): string {
+    switch (step) {
+      case ConversationStep.GREETING:
+        return '첫 인사';
+      case ConversationStep.WELLBEING:
+        return '오늘 하루 안부';
+      case ConversationStep.MEAL:
+        return '식사 확인';
+      case ConversationStep.HEALTH:
+        return '건강 상태 확인';
+      case ConversationStep.MEDICATION:
+        return '복약 확인';
+      case ConversationStep.SLEEP:
+        return '수면 확인';
+      case ConversationStep.SCHEDULE:
+        return '일정 확인';
+      case ConversationStep.MOOD:
+        return '기분 확인';
+      case ConversationStep.CLOSING:
+        return '마무리';
+      case ConversationStep.FREE_TALK:
+      default:
+        return '자유 대화';
+    }
+  }
+
+  private getConversationStepPrompt(step: ConversationStep): string {
+    switch (step) {
+      case ConversationStep.WELLBEING:
+        return '오늘 하루는 어떠셨는지 다정하게 물어보세요.';
+      case ConversationStep.MEAL:
+        return '오늘 식사는 잘 챙겨 드셨는지 물어보세요.';
+      case ConversationStep.HEALTH:
+        return '아픈 곳이나 불편한 곳이 있는지 물어보세요.';
+      case ConversationStep.MEDICATION:
+        return '드셔야 할 약은 잘 챙겨 드셨는지 물어보세요.';
+      case ConversationStep.SLEEP:
+        return '잠은 편하게 주무셨는지 물어보세요.';
+      case ConversationStep.SCHEDULE:
+        return '오늘이나 내일 챙길 일정이 있는지 물어보세요.';
+      case ConversationStep.MOOD:
+        return '요즘 마음이나 기분은 어떠신지 물어보세요.';
+      case ConversationStep.CLOSING:
+        return '대화를 따뜻하게 마무리하세요.';
+      case ConversationStep.GREETING:
+      case ConversationStep.FREE_TALK:
+      default:
+        return '사용자의 말에 공감하고 짧은 후속 질문을 하세요.';
+    }
   }
 
   private async buildAssistantMessages(
@@ -838,10 +1054,13 @@ export class CallSessionsService {
       clientTurnId: userTurn.clientTurnId ?? '',
       sessionId: userTurn.callSessionId,
       userText: userTurn.text,
-      assistantText: assistantTurn?.text ?? AUTO_TURN_MOCK_ASSISTANT_TEXT,
+      assistantText:
+        assistantTurn?.text ?? AUTO_CONVERSATION_DEFAULT_ASSISTANT_TEXT,
       audioMimeType: options.audioMimeType ?? null,
       audioBase64: options.audioBase64 ?? null,
-      conversationStep: this.toApiConversationStep(userTurn.conversationStep),
+      conversationStep: this.toApiConversationStep(
+        assistantTurn?.conversationStep ?? userTurn.conversationStep,
+      ),
       nextAction:
         options.nextAction ?? (failed ? 'listen_again' : 'play_audio'),
       failed,

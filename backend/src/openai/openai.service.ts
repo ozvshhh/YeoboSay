@@ -49,7 +49,10 @@ export class OpenAiService {
     return transcription.text.trim();
   }
 
-  async generateAssistantText(messages: AssistantMessage[]): Promise<string> {
+  async generateAssistantText(
+    messages: AssistantMessage[],
+    extraInstructions?: string,
+  ): Promise<string> {
     const response = await this.getClient().responses.create({
       model: this.responseModel,
       instructions: [
@@ -58,6 +61,7 @@ export class OpenAiService {
         'Reply in Korean when the user speaks Korean, and in English when the user speaks English.',
         'Use 1 to 3 short sentences.',
         'If the user describes immediate danger, self-harm, or a medical emergency, gently tell them to contact 119 or a nearby person right away.',
+        extraInstructions,
       ].join(' '),
       input: messages.map((message) => ({
         role: message.role,

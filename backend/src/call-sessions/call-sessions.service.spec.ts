@@ -478,7 +478,7 @@ describe('CallSessionsService', () => {
     ).rejects.toBeInstanceOf(BadGatewayException);
   });
 
-  it('transcribes an automatic turn with clientTurnId and returns a mock response', async () => {
+  it('processes an automatic turn through transcription, assistant text, and speech', async () => {
     const audio = {
       buffer: Buffer.from('audio'),
       mimetype: 'audio/mp4',
@@ -516,9 +516,9 @@ describe('CallSessionsService', () => {
       callSessionId: 'session-1',
       clientTurnId: null,
       role: ConversationRole.ASSISTANT,
-      text: '말씀을 잘 받았어요. 다음 단계에서 실제 AI 답변으로 연결할게요.',
+      text: '산책을 하셨군요. 오늘 식사는 잘 챙겨 드셨어요?',
       status: ConversationTurnStatus.COMPLETED,
-      conversationStep: ConversationStep.WELLBEING,
+      conversationStep: ConversationStep.MEAL,
       bargeIn: false,
       failed: false,
       riskFlag: false,
@@ -544,9 +544,32 @@ describe('CallSessionsService', () => {
         status: ConversationTurnStatus.TRANSCRIBING,
       })
       .mockResolvedValueOnce(transcribedUserTurn)
+      .mockResolvedValueOnce({
+        ...transcribedUserTurn,
+        status: ConversationTurnStatus.RESPONDING,
+      })
+      .mockResolvedValueOnce({
+        ...transcribedUserTurn,
+        status: ConversationTurnStatus.RESPONDED,
+      })
+      .mockResolvedValueOnce({
+        ...transcribedUserTurn,
+        status: ConversationTurnStatus.SYNTHESIZING,
+      })
       .mockResolvedValueOnce(completedUserTurn);
     prisma.callSession.update.mockResolvedValue({});
     openAiService.transcribeAudio.mockResolvedValue('오늘은 산책을 했어요.');
+    prisma.conversationTurn.findMany.mockResolvedValue([
+      {
+        ...userTurn,
+        text: '오늘은 산책을 했어요.',
+        status: ConversationTurnStatus.TRANSCRIBED,
+      },
+    ]);
+    openAiService.generateAssistantText.mockResolvedValue(
+      '산책을 하셨군요. 오늘 식사는 잘 챙겨 드셨어요?',
+    );
+    openAiService.synthesizeSpeech.mockResolvedValue(Buffer.from('mp3'));
 
     await expect(
       service.processAutoAudioTurn(
@@ -564,11 +587,10 @@ describe('CallSessionsService', () => {
       clientTurnId: 'android-turn-1',
       sessionId: 'session-1',
       userText: '오늘은 산책을 했어요.',
-      assistantText:
-        '말씀을 잘 받았어요. 다음 단계에서 실제 AI 답변으로 연결할게요.',
-      audioMimeType: null,
-      audioBase64: null,
-      conversationStep: 'wellbeing',
+      assistantText: '산책을 하셨군요. 오늘 식사는 잘 챙겨 드셨어요?',
+      audioMimeType: 'audio/mpeg',
+      audioBase64: Buffer.from('mp3').toString('base64'),
+      conversationStep: 'meal',
       nextAction: 'play_audio',
       failed: false,
       riskFlag: false,
@@ -603,12 +625,24 @@ describe('CallSessionsService', () => {
       where: { id: 'session-1' },
       data: {
         status: CallSessionStatus.AI_SPEAKING,
-        currentStep: ConversationStep.WELLBEING,
+        currentStep: ConversationStep.MEAL,
         turnCount: { increment: 1 },
         riskFlag: undefined,
         riskType: undefined,
       },
     });
+    expect(openAiService.generateAssistantText).toHaveBeenCalledWith(
+      [
+        {
+          role: 'user',
+          content: '오늘은 산책을 했어요.',
+        },
+      ],
+      expect.stringContaining('식사 확인'),
+    );
+    expect(openAiService.synthesizeSpeech).toHaveBeenCalledWith(
+      '산책을 하셨군요. 오늘 식사는 잘 챙겨 드셨어요?',
+    );
   });
 
   it('returns listen_again when automatic turn transcription is empty', async () => {
@@ -801,6 +835,225 @@ describe('CallSessionsService', () => {
       'session-1',
       error,
     );
+  });
+
+  it('stores failed llm status when automatic assistant text generation fails', async () => {
+    const audio = {
+      buffer: Buffer.from('audio'),
+      mimetype: 'audio/mp4',
+      originalname: 'auto-turn.m4a',
+    } as Express.Multer.File;
+    const userTurn = {
+      id: 'turn-user-1',
+      callSessionId: 'session-1',
+      clientTurnId: 'android-turn-1',
+      role: ConversationRole.USER,
+      text: '',
+      status: ConversationTurnStatus.UPLOADED,
+      conversationStep: ConversationStep.WELLBEING,
+      bargeIn: false,
+      failed: false,
+      riskFlag: false,
+      riskType: null,
+      createdAt: now,
+      completedAt: null,
+      errorCode: null,
+    };
+    const transcribedUserTurn = {
+      ...userTurn,
+      text: '밥은 아직 안 먹었어.',
+      status: ConversationTurnStatus.TRANSCRIBED,
+    };
+    const failedUserTurn = {
+      ...transcribedUserTurn,
+      status: ConversationTurnStatus.FAILED_LLM,
+      failed: true,
+      errorCode: 'LLM_FAILED',
+      completedAt: now,
+    };
+    const failureTurn = {
+      ...userTurn,
+      id: 'turn-assistant-1',
+      clientTurnId: null,
+      role: ConversationRole.ASSISTANT,
+      text: '응답을 만드는 중 문제가 생겼어요. 잠시 후 다시 말해 주세요.',
+      status: ConversationTurnStatus.COMPLETED,
+      conversationStep: ConversationStep.MEAL,
+      failed: true,
+      completedAt: now,
+    };
+    const error = new Error('LLM failed');
+
+    prisma.callSession.findUnique.mockResolvedValue({
+      ...baseSession,
+      mode: CallSessionMode.AUTO_CONVERSATION,
+      status: CallSessionStatus.WAITING_FOR_USER,
+      currentStep: ConversationStep.WELLBEING,
+    });
+    prisma.conversationTurn.findFirst.mockResolvedValue(null);
+    prisma.conversationTurn.create
+      .mockResolvedValueOnce(userTurn)
+      .mockResolvedValueOnce(failureTurn);
+    prisma.conversationTurn.update
+      .mockResolvedValueOnce({
+        ...userTurn,
+        status: ConversationTurnStatus.TRANSCRIBING,
+      })
+      .mockResolvedValueOnce(transcribedUserTurn)
+      .mockResolvedValueOnce({
+        ...transcribedUserTurn,
+        status: ConversationTurnStatus.RESPONDING,
+      })
+      .mockResolvedValueOnce(failedUserTurn);
+    prisma.conversationTurn.findMany.mockResolvedValue([transcribedUserTurn]);
+    prisma.callSession.update.mockResolvedValue({});
+    openAiService.transcribeAudio.mockResolvedValue('밥은 아직 안 먹었어.');
+    openAiService.generateAssistantText.mockRejectedValue(error);
+
+    await expect(
+      service.processAutoAudioTurn(
+        'session-1',
+        {
+          clientTurnId: 'android-turn-1',
+          mode: 'auto_conversation',
+          conversationStep: 'wellbeing',
+        },
+        audio,
+      ),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        assistantText:
+          '응답을 만드는 중 문제가 생겼어요. 잠시 후 다시 말해 주세요.',
+        nextAction: 'listen_again',
+        failed: true,
+        conversationStep: 'meal',
+      }),
+    );
+    expect(prisma.conversationTurn.update).toHaveBeenCalledWith({
+      where: { id: 'turn-user-1' },
+      data: {
+        status: ConversationTurnStatus.FAILED_LLM,
+        failed: true,
+        errorCode: 'LLM_FAILED',
+        completedAt: now,
+      },
+    });
+    expect(openAiService.synthesizeSpeech).not.toHaveBeenCalled();
+  });
+
+  it('stores failed tts status when automatic speech generation fails', async () => {
+    const audio = {
+      buffer: Buffer.from('audio'),
+      mimetype: 'audio/mp4',
+      originalname: 'auto-turn.m4a',
+    } as Express.Multer.File;
+    const userTurn = {
+      id: 'turn-user-1',
+      callSessionId: 'session-1',
+      clientTurnId: 'android-turn-1',
+      role: ConversationRole.USER,
+      text: '',
+      status: ConversationTurnStatus.UPLOADED,
+      conversationStep: ConversationStep.WELLBEING,
+      bargeIn: false,
+      failed: false,
+      riskFlag: false,
+      riskType: null,
+      createdAt: now,
+      completedAt: null,
+      errorCode: null,
+    };
+    const transcribedUserTurn = {
+      ...userTurn,
+      text: '밥은 먹었어.',
+      status: ConversationTurnStatus.TRANSCRIBED,
+    };
+    const failedUserTurn = {
+      ...transcribedUserTurn,
+      status: ConversationTurnStatus.FAILED_TTS,
+      failed: true,
+      errorCode: 'TTS_FAILED',
+      completedAt: now,
+    };
+    const failedAssistantTurn = {
+      ...userTurn,
+      id: 'turn-assistant-1',
+      clientTurnId: null,
+      role: ConversationRole.ASSISTANT,
+      text: '식사 챙기셨다니 다행이에요. 불편한 곳은 없으세요?',
+      status: ConversationTurnStatus.COMPLETED,
+      conversationStep: ConversationStep.MEAL,
+      failed: true,
+      completedAt: now,
+    };
+    const error = new Error('TTS failed');
+
+    prisma.callSession.findUnique.mockResolvedValue({
+      ...baseSession,
+      mode: CallSessionMode.AUTO_CONVERSATION,
+      status: CallSessionStatus.WAITING_FOR_USER,
+      currentStep: ConversationStep.WELLBEING,
+    });
+    prisma.conversationTurn.findFirst.mockResolvedValue(null);
+    prisma.conversationTurn.create
+      .mockResolvedValueOnce(userTurn)
+      .mockResolvedValueOnce(failedAssistantTurn);
+    prisma.conversationTurn.update
+      .mockResolvedValueOnce({
+        ...userTurn,
+        status: ConversationTurnStatus.TRANSCRIBING,
+      })
+      .mockResolvedValueOnce(transcribedUserTurn)
+      .mockResolvedValueOnce({
+        ...transcribedUserTurn,
+        status: ConversationTurnStatus.RESPONDING,
+      })
+      .mockResolvedValueOnce({
+        ...transcribedUserTurn,
+        status: ConversationTurnStatus.RESPONDED,
+      })
+      .mockResolvedValueOnce({
+        ...transcribedUserTurn,
+        status: ConversationTurnStatus.SYNTHESIZING,
+      })
+      .mockResolvedValueOnce(failedUserTurn);
+    prisma.conversationTurn.findMany.mockResolvedValue([transcribedUserTurn]);
+    prisma.callSession.update.mockResolvedValue({});
+    openAiService.transcribeAudio.mockResolvedValue('밥은 먹었어.');
+    openAiService.generateAssistantText.mockResolvedValue(
+      '식사 챙기셨다니 다행이에요. 불편한 곳은 없으세요?',
+    );
+    openAiService.synthesizeSpeech.mockRejectedValue(error);
+
+    await expect(
+      service.processAutoAudioTurn(
+        'session-1',
+        {
+          clientTurnId: 'android-turn-1',
+          mode: 'auto_conversation',
+          conversationStep: 'wellbeing',
+        },
+        audio,
+      ),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        assistantText: '식사 챙기셨다니 다행이에요. 불편한 곳은 없으세요?',
+        audioMimeType: null,
+        audioBase64: null,
+        nextAction: 'listen_again',
+        failed: true,
+        conversationStep: 'meal',
+      }),
+    );
+    expect(prisma.conversationTurn.update).toHaveBeenCalledWith({
+      where: { id: 'turn-user-1' },
+      data: {
+        status: ConversationTurnStatus.FAILED_TTS,
+        failed: true,
+        errorCode: 'TTS_FAILED',
+        completedAt: now,
+      },
+    });
   });
 
   it('returns a completed automatic turn for duplicate clientTurnId', async () => {
