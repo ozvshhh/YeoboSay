@@ -215,9 +215,7 @@ class YeoboSayApi(
                 "Content-Disposition: form-data; name=\"audio\"; filename=\"speech.wav\"\r\n"
                     .toByteArray(),
             )
-            // The current backend mock only validates the multipart content type.
-            // The captured payload is WAV PCM and will be wired to STT in a later step.
-            output.write("Content-Type: audio/mp4\r\n\r\n".toByteArray())
+            output.write("Content-Type: audio/wav\r\n\r\n".toByteArray())
             audioFile.inputStream().use { it.copyTo(output) }
             output.write("\r\n--$boundary--\r\n".toByteArray())
         }

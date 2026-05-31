@@ -3,6 +3,7 @@ package com.yeobosay.app.ui.call
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.yeobosay.app.data.AutoVoiceTurnResponse
 import com.yeobosay.app.data.CallInvitationResponse
 import com.yeobosay.app.data.CallInvitationSocket
 import com.yeobosay.app.data.CallSessionMode
@@ -26,6 +27,10 @@ import java.time.Instant
 private const val MAX_RECORDING_MILLIS = 30_000L
 private const val MIN_RECORDING_MILLIS = 500L
 private const val DEFAULT_GREETING = "안녕하세요. 저는 YeoboSay 말벗이에요. 오늘은 어떻게 지내셨어요?"
+private const val NEXT_ACTION_PLAY_AUDIO = "play_audio"
+private const val NEXT_ACTION_LISTEN_AGAIN = "listen_again"
+private const val NEXT_ACTION_END_CALL_AFTER_AUDIO = "end_call_after_audio"
+private const val NEXT_ACTION_FORCE_END = "force_end"
 
 data class CallMessage(
     val role: MessageRole,
@@ -576,26 +581,30 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                 audioFile.delete()
                 val messages = buildList {
                     addAll(_uiState.value.messages)
-                    add(
-                        CallMessage(
-                            role = MessageRole.User,
-                            text = response.userText,
-                            riskFlag = response.riskFlag,
-                        ),
-                    )
-                    add(
-                        CallMessage(
-                            role = MessageRole.Assistant,
-                            text = response.assistantText,
-                            failed = response.failed,
-                        ),
-                    )
+                    if (response.userText.isNotBlank()) {
+                        add(
+                            CallMessage(
+                                role = MessageRole.User,
+                                text = response.userText,
+                                riskFlag = response.riskFlag,
+                            ),
+                        )
+                    }
+                    if (response.assistantText.isNotBlank()) {
+                        add(
+                            CallMessage(
+                                role = MessageRole.Assistant,
+                                text = response.assistantText,
+                                failed = response.failed,
+                            ),
+                        )
+                    }
                 }
                 _uiState.update {
                     it.copy(
                         messages = messages,
                         isUploading = false,
-                        speechDebugStatus = "AUTO_UPLOAD_COMPLETED",
+                        speechDebugStatus = "AUTO_RESPONSE_READY",
                         statusText = if (response.failed) {
                             "응답 처리에 실패했습니다."
                         } else {
@@ -605,9 +614,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
 
-                if (_uiState.value.isAutoConversation && _uiState.value.callSessionId != null) {
-                    startAutoSpeechDetection()
-                }
+                handleAutoTurnResponse(response)
             }.onFailure { error ->
                 audioFile.delete()
                 _uiState.update {
@@ -623,6 +630,103 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
+    }
+
+    private fun handleAutoTurnResponse(response: AutoVoiceTurnResponse) {
+        if (!hasActiveAutoSession()) return
+
+        when (response.nextAction) {
+            NEXT_ACTION_PLAY_AUDIO -> playAutoResponseThen(response.audioBase64) {
+                resumeAutoListening()
+            }
+
+            NEXT_ACTION_LISTEN_AGAIN -> playAutoResponseThen(response.audioBase64) {
+                resumeAutoListening("다시 한 번 말씀해 주세요.")
+            }
+
+            NEXT_ACTION_END_CALL_AFTER_AUDIO -> playAutoResponseThen(response.audioBase64) {
+                endSession()
+            }
+
+            NEXT_ACTION_FORCE_END -> endSession()
+
+            else -> {
+                if (response.audioBase64.isNullOrBlank()) {
+                    resumeAutoListening()
+                } else {
+                    playAutoResponseThen(response.audioBase64) {
+                        resumeAutoListening()
+                    }
+                }
+            }
+        }
+    }
+
+    private fun playAutoResponseThen(audioBase64: String?, onComplete: () -> Unit) {
+        val playableAudio = audioBase64?.takeIf { it.isNotBlank() }
+        if (playableAudio == null) {
+            _uiState.update {
+                it.copy(
+                    isPlaying = false,
+                    speechDebugStatus = "AUTO_RESPONSE_AUDIO_MISSING",
+                    statusText = "응답 음성 없이 다음 단계로 넘어갑니다.",
+                )
+            }
+            onComplete()
+            return
+        }
+
+        _uiState.update {
+            it.copy(
+                isPlaying = true,
+                isListening = false,
+                isUserSpeaking = false,
+                speechDebugStatus = "AI_PLAYING",
+                statusText = "AI가 답변하고 있어요.",
+                errorText = null,
+            )
+        }
+
+        runCatching {
+            player.playBase64Mp3(playableAudio) {
+                _uiState.update {
+                    it.copy(
+                        isPlaying = false,
+                        speechDebugStatus = "AI_PLAYBACK_COMPLETED",
+                    )
+                }
+                onComplete()
+            }
+        }.onFailure { error ->
+            _uiState.update {
+                it.copy(
+                    isPlaying = false,
+                    speechDebugStatus = "AI_PLAYBACK_FAILED",
+                    statusText = "응답 음성을 재생하지 못했습니다.",
+                    errorText = error.message ?: "AI 응답 음성 재생에 실패했습니다.",
+                )
+            }
+            onComplete()
+        }
+    }
+
+    private fun resumeAutoListening(statusText: String = "말씀을 듣고 있어요.") {
+        if (!hasActiveAutoSession()) return
+
+        _uiState.update {
+            it.copy(
+                isPlaying = false,
+                isListening = false,
+                isUserSpeaking = false,
+                statusText = statusText,
+            )
+        }
+        startAutoSpeechDetection()
+    }
+
+    private fun hasActiveAutoSession(): Boolean {
+        val state = _uiState.value
+        return state.isAutoConversation && state.callSessionId != null && !state.isEndingSession
     }
 
     private fun nextAutoClientTurnId(sessionId: String): String {
