@@ -16,6 +16,10 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.io.ByteArrayOutputStream
+import java.io.File
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import kotlin.math.max
 import kotlin.math.sqrt
 
@@ -40,6 +44,14 @@ interface SpeechDetectionListener {
     fun onListening(snapshot: SpeechDetectionSnapshot)
     fun onSpeechStarted(snapshot: SpeechDetectionSnapshot)
     fun onSpeechEnded(durationMs: Long, snapshot: SpeechDetectionSnapshot)
+    fun onSpeechEndedWithAudio(
+        durationMs: Long,
+        snapshot: SpeechDetectionSnapshot,
+        audioFile: File?,
+    ) {
+        onSpeechEnded(durationMs, snapshot)
+    }
+
     fun onError(message: String)
 }
 
@@ -121,6 +133,7 @@ class SpeechRmsDetector(
     ) {
         val record = recordingSource.record
         val buffer = ShortArray(bufferSize)
+        var speechPcmBuffer = ByteArrayOutputStream()
         var isSpeaking = false
         var speechStartedAt = 0L
         var lastSpeechAt = 0L
@@ -154,14 +167,21 @@ class SpeechRmsDetector(
                     if (!isSpeaking) {
                         isSpeaking = true
                         speechStartedAt = now
+                        speechPcmBuffer = ByteArrayOutputStream()
                         listener.onSpeechStarted(snapshot.copy(isSpeaking = true))
                     } else {
                         listener.onListening(snapshot.copy(isSpeaking = true))
                     }
+                    speechPcmBuffer.writePcm16(buffer, readCount)
                     if (now - speechStartedAt >= config.maxUtteranceMs) {
                         val durationMs = now - speechStartedAt
+                        val audioFile = writeWavFile(speechPcmBuffer.toByteArray())
                         isSpeaking = false
-                        listener.onSpeechEnded(durationMs, snapshot.copy(isSpeaking = false))
+                        listener.onSpeechEndedWithAudio(
+                            durationMs,
+                            snapshot.copy(isSpeaking = false),
+                            audioFile,
+                        )
                     }
                     continue
                 }
@@ -170,11 +190,20 @@ class SpeechRmsDetector(
                     val durationMs = lastSpeechAt - speechStartedAt
                     isSpeaking = false
                     if (durationMs >= config.minSpeechMs) {
-                        listener.onSpeechEnded(durationMs, snapshot.copy(isSpeaking = false))
+                        val audioFile = writeWavFile(speechPcmBuffer.toByteArray())
+                        listener.onSpeechEndedWithAudio(
+                            durationMs,
+                            snapshot.copy(isSpeaking = false),
+                            audioFile,
+                        )
                     } else {
                         listener.onListening(snapshot.copy(isSpeaking = false))
                     }
+                    speechPcmBuffer = ByteArrayOutputStream()
                 } else {
+                    if (isSpeaking) {
+                        speechPcmBuffer.writePcm16(buffer, readCount)
+                    }
                     listener.onListening(snapshot.copy(isSpeaking = isSpeaking))
                 }
             }
@@ -226,4 +255,49 @@ class SpeechRmsDetector(
         val record: AudioRecord,
         val name: String,
     )
+
+    private fun ByteArrayOutputStream.writePcm16(buffer: ShortArray, length: Int) {
+        val bytes = ByteArray(length * 2)
+        val byteBuffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+        for (index in 0 until length) {
+            byteBuffer.putShort(buffer[index])
+        }
+        write(bytes)
+    }
+
+    private fun writeWavFile(pcmBytes: ByteArray): File? {
+        if (pcmBytes.isEmpty()) return null
+
+        return runCatching {
+            val file = File.createTempFile("yeobosay-auto-turn-", ".wav", context.cacheDir)
+            file.outputStream().use { output ->
+                output.write(createWavHeader(pcmBytes.size))
+                output.write(pcmBytes)
+            }
+            file
+        }.getOrNull()
+    }
+
+    private fun createWavHeader(pcmDataSize: Int): ByteArray {
+        val channelCount = 1
+        val bitsPerSample = 16
+        val byteRate = config.sampleRateHz * channelCount * bitsPerSample / 8
+        val blockAlign = channelCount * bitsPerSample / 8
+
+        return ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN).apply {
+            put("RIFF".toByteArray(Charsets.US_ASCII))
+            putInt(36 + pcmDataSize)
+            put("WAVE".toByteArray(Charsets.US_ASCII))
+            put("fmt ".toByteArray(Charsets.US_ASCII))
+            putInt(16)
+            putShort(1)
+            putShort(channelCount.toShort())
+            putInt(config.sampleRateHz)
+            putInt(byteRate)
+            putShort(blockAlign.toShort())
+            putShort(bitsPerSample.toShort())
+            put("data".toByteArray(Charsets.US_ASCII))
+            putInt(pcmDataSize)
+        }.array()
+    }
 }
