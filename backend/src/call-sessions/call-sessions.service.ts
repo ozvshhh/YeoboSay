@@ -19,6 +19,7 @@ import { OpenAiService } from '../openai/openai.service';
 import type { AssistantMessage } from '../openai/openai.service';
 import { PrismaService } from '../prisma/prisma.service';
 import {
+  AutoTurnNextAction,
   AutoVoiceTurnResponseDto,
   AutoVoiceTurnUploadDto,
 } from './auto-voice-turn.dto';
@@ -38,14 +39,23 @@ const CALL_SESSION_DURATION_MS = 10 * 60 * 1000;
 const TARGET_AUTO_TURN_COUNT = 5;
 const RECENT_TURN_LIMIT = 12;
 const SUPPORTED_AUDIO_MIME_TYPE = 'audio/mp4';
+const SUPPORTED_AUTO_AUDIO_MIME_TYPES = new Set([
+  'audio/mp4',
+  'audio/m4a',
+  'audio/wav',
+  'audio/x-wav',
+  'audio/mpeg',
+  'audio/mp3',
+]);
 const ASSISTANT_FAILURE_MESSAGE =
   '응답을 만드는 중 문제가 생겼어요. 잠시 후 다시 말해 주세요.';
+const AUTO_CONVERSATION_RETRY_PROMPT =
+  '죄송해요, 잘 못 들었어요. 다시 한 번 말씀해 주시겠어요?';
 const AUTO_CONVERSATION_FIRST_GREETING =
   '안녕하세요 왕송길 어르신 AI통화 서비스 세요입니다!';
 const AUTO_CONVERSATION_NO_RESPONSE_PROMPT = '여보세요? 제 말 들리세요?';
 const AUTO_CONVERSATION_MAX_DURATION_CLOSING =
   '어르신 아쉽지만 오늘 통화는 여기까지에요.';
-const AUTO_TURN_MOCK_USER_TEXT = '자동 발화가 접수됐어요.';
 const AUTO_TURN_MOCK_ASSISTANT_TEXT =
   '말씀을 잘 받았어요. 다음 단계에서 실제 AI 답변으로 연결할게요.';
 const TERMINAL_TURN_STATUSES = new Set<ConversationTurnStatus>([
@@ -74,6 +84,19 @@ const AUTO_CONVERSATION_POLICY: ConversationPolicyResponseDto = {
 type FirstGreetingAudio = {
   mimeType: string;
   base64: string;
+};
+
+type AutoAudioMetadata = {
+  filename: string;
+  mimeType: string;
+  size: number;
+};
+
+type AutoVoiceTurnResponseOptions = {
+  audioMimeType?: string | null;
+  audioBase64?: string | null;
+  nextAction?: AutoTurnNextAction;
+  failed?: boolean;
 };
 
 const RISK_KEYWORDS: Array<{ type: string; keywords: string[] }> = [
@@ -317,7 +340,8 @@ export class CallSessionsService {
       throw new ConflictException('Call session is expired.');
     }
 
-    this.validateAudioUpload(audio);
+    this.validateAutoAudioUpload(audio, dto);
+    const audioMetadata = this.resolveAutoAudioMetadata(audio, dto);
 
     const existingTurn = await this.prisma.conversationTurn.findFirst({
       where: {
@@ -340,9 +364,9 @@ export class CallSessionsService {
 
     this.demoLogger.voiceTurnStarted(
       id,
-      audio.originalname || 'auto-turn.m4a',
-      audio.mimetype,
-      audio.size ?? audio.buffer.length,
+      audioMetadata.filename,
+      audioMetadata.mimeType,
+      audioMetadata.size,
     );
 
     const conversationStep = this.toPrismaConversationStep(
@@ -353,7 +377,7 @@ export class CallSessionsService {
         callSessionId: id,
         clientTurnId: dto.clientTurnId,
         role: ConversationRole.USER,
-        text: AUTO_TURN_MOCK_USER_TEXT,
+        text: '',
         status: ConversationTurnStatus.UPLOADED,
         conversationStep,
         bargeIn: dto.bargeIn === 'true',
@@ -365,8 +389,119 @@ export class CallSessionsService {
       data: { status: CallSessionStatus.PROCESSING_TURN },
     });
 
-    const completedUserTurn = await this.prisma.conversationTurn.update({
+    await this.prisma.conversationTurn.update({
       where: { id: userTurn.id },
+      data: {
+        status: ConversationTurnStatus.TRANSCRIBING,
+      },
+    });
+
+    let userText: string;
+
+    try {
+      userText = await this.openAiService.transcribeAudio(
+        audio.buffer,
+        audioMetadata.filename,
+        audioMetadata.mimeType,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Automatic turn transcription failed: callSessionId=${id} clientTurnId=${dto.clientTurnId}`,
+        error instanceof Error ? error.stack : undefined,
+      );
+
+      const failedUserTurn = await this.prisma.conversationTurn.update({
+        where: { id: userTurn.id },
+        data: {
+          status: ConversationTurnStatus.FAILED_STT,
+          failed: true,
+          errorCode: 'STT_FAILED',
+          completedAt: new Date(),
+        },
+      });
+      const retryTurn = await this.createAutoRetryAssistantTurn(
+        id,
+        conversationStep,
+        true,
+      );
+
+      await this.prisma.callSession.update({
+        where: { id },
+        data: { status: CallSessionStatus.WAITING_FOR_USER },
+      });
+
+      this.demoLogger.assistantGenerationFailed(id, error);
+      this.demoLogger.assistantTextGenerated(
+        id,
+        AUTO_CONVERSATION_RETRY_PROMPT,
+        true,
+      );
+
+      return this.toAutoVoiceTurnResponse(failedUserTurn, retryTurn, {
+        nextAction: 'listen_again',
+        failed: true,
+      });
+    }
+
+    if (!userText) {
+      const emptyUserTurn = await this.prisma.conversationTurn.update({
+        where: { id: userTurn.id },
+        data: {
+          status: ConversationTurnStatus.FAILED_STT,
+          failed: true,
+          errorCode: 'EMPTY_TRANSCRIPTION',
+          completedAt: new Date(),
+        },
+      });
+      const retryTurn = await this.createAutoRetryAssistantTurn(
+        id,
+        conversationStep,
+        false,
+      );
+
+      await this.prisma.callSession.update({
+        where: { id },
+        data: { status: CallSessionStatus.WAITING_FOR_USER },
+      });
+
+      this.demoLogger.assistantTextGenerated(
+        id,
+        AUTO_CONVERSATION_RETRY_PROMPT,
+        false,
+      );
+
+      return this.toAutoVoiceTurnResponse(emptyUserTurn, retryTurn, {
+        nextAction: 'listen_again',
+        failed: false,
+      });
+    }
+
+    const riskType = this.detectRiskType(userText);
+    const riskFlag = Boolean(riskType);
+
+    if (riskFlag) {
+      this.logger.warn(
+        `Risk speech detected: callSessionId=${id} riskType=${riskType}`,
+      );
+    }
+
+    this.demoLogger.userTextTranscribed(id, userText, {
+      riskFlag,
+      riskType,
+    });
+
+    const transcribedUserTurn = await this.prisma.conversationTurn.update({
+      where: { id: userTurn.id },
+      data: {
+        text: userText,
+        status: ConversationTurnStatus.TRANSCRIBED,
+        riskFlag,
+        riskType,
+      },
+    });
+
+    const completedUserTurn = await this.prisma.conversationTurn.update({
+      where: { id: transcribedUserTurn.id },
       data: {
         status: ConversationTurnStatus.COMPLETED,
         completedAt: new Date(),
@@ -390,6 +525,8 @@ export class CallSessionsService {
         status: CallSessionStatus.AI_SPEAKING,
         currentStep: conversationStep ?? session.currentStep,
         turnCount: { increment: 1 },
+        riskFlag: riskFlag ? true : undefined,
+        riskType: riskType ?? undefined,
       },
     });
 
@@ -455,6 +592,38 @@ export class CallSessionsService {
         'Only audio/mp4 M4A uploads are supported.',
       );
     }
+  }
+
+  private validateAutoAudioUpload(
+    audio: Express.Multer.File | undefined,
+    dto: AutoVoiceTurnUploadDto,
+  ): asserts audio is Express.Multer.File {
+    if (!audio) {
+      throw new BadRequestException('Audio file is required.');
+    }
+
+    if (!audio.buffer?.length) {
+      throw new BadRequestException('Audio file is empty.');
+    }
+
+    const requestedMimeType = dto.mimeType || audio.mimetype;
+
+    if (!SUPPORTED_AUTO_AUDIO_MIME_TYPES.has(requestedMimeType)) {
+      throw new BadRequestException(
+        'Only audio/mp4, audio/wav, and audio/mpeg uploads are supported.',
+      );
+    }
+  }
+
+  private resolveAutoAudioMetadata(
+    audio: Express.Multer.File,
+    dto: AutoVoiceTurnUploadDto,
+  ): AutoAudioMetadata {
+    return {
+      filename: audio.originalname || 'auto-turn.m4a',
+      mimeType: dto.mimeType || audio.mimetype,
+      size: audio.size ?? audio.buffer.length,
+    };
   }
 
   private async transcribeAudio(audio: Express.Multer.File): Promise<string> {
@@ -527,6 +696,24 @@ export class CallSessionsService {
         createdAt: { gte: userTurn.createdAt },
       },
       orderBy: { createdAt: 'asc' },
+    });
+  }
+
+  private async createAutoRetryAssistantTurn(
+    callSessionId: string,
+    conversationStep: ConversationStep | undefined,
+    failed: boolean,
+  ): Promise<ConversationTurn> {
+    return this.prisma.conversationTurn.create({
+      data: {
+        callSessionId,
+        role: ConversationRole.ASSISTANT,
+        text: AUTO_CONVERSATION_RETRY_PROMPT,
+        status: ConversationTurnStatus.COMPLETED,
+        conversationStep,
+        failed,
+        completedAt: new Date(),
+      },
     });
   }
 
@@ -641,8 +828,10 @@ export class CallSessionsService {
   private toAutoVoiceTurnResponse(
     userTurn: ConversationTurn,
     assistantTurn: ConversationTurn | null,
+    options: AutoVoiceTurnResponseOptions = {},
   ): AutoVoiceTurnResponseDto {
-    const failed = userTurn.failed || Boolean(assistantTurn?.failed);
+    const failed =
+      options.failed ?? (userTurn.failed || Boolean(assistantTurn?.failed));
 
     return {
       turnId: userTurn.id,
@@ -650,10 +839,11 @@ export class CallSessionsService {
       sessionId: userTurn.callSessionId,
       userText: userTurn.text,
       assistantText: assistantTurn?.text ?? AUTO_TURN_MOCK_ASSISTANT_TEXT,
-      audioMimeType: null,
-      audioBase64: null,
+      audioMimeType: options.audioMimeType ?? null,
+      audioBase64: options.audioBase64 ?? null,
       conversationStep: this.toApiConversationStep(userTurn.conversationStep),
-      nextAction: failed ? 'listen_again' : 'play_audio',
+      nextAction:
+        options.nextAction ?? (failed ? 'listen_again' : 'play_audio'),
       failed,
       riskFlag: userTurn.riskFlag || Boolean(assistantTurn?.riskFlag),
       riskType: userTurn.riskType ?? assistantTurn?.riskType ?? null,
