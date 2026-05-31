@@ -62,6 +62,21 @@ data class VoiceTurnResponse(
     val riskType: String?,
 )
 
+data class AutoVoiceTurnResponse(
+    val turnId: String,
+    val clientTurnId: String,
+    val sessionId: String,
+    val userText: String,
+    val assistantText: String,
+    val audioMimeType: String?,
+    val audioBase64: String?,
+    val conversationStep: String?,
+    val nextAction: String,
+    val failed: Boolean,
+    val riskFlag: Boolean,
+    val riskType: String?,
+)
+
 data class CallInvitationResponse(
     val id: String,
     val status: String,
@@ -167,6 +182,61 @@ class YeoboSayApi(
             )
         }
 
+    suspend fun uploadAutoAudioTurn(
+        callSessionId: String,
+        clientTurnId: String,
+        audioFile: File,
+        startedAt: String? = null,
+        endedAt: String? = null,
+        durationMs: Long? = null,
+        bargeIn: Boolean = false,
+        conversationStep: String? = null,
+    ): AutoVoiceTurnResponse = withContext(Dispatchers.IO) {
+        val boundary = "YeoboSayBoundary${System.currentTimeMillis()}"
+        val connection = openConnection(
+            method = "POST",
+            path = "/call-sessions/$callSessionId/auto-turns/audio",
+        ).apply {
+            doOutput = true
+            setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+        }
+
+        BufferedOutputStream(connection.outputStream).use { output ->
+            output.writeTextPart(boundary, "clientTurnId", clientTurnId)
+            output.writeTextPart(boundary, "mode", CallSessionMode.AutoConversation.apiValue)
+            startedAt?.let { output.writeTextPart(boundary, "startedAt", it) }
+            endedAt?.let { output.writeTextPart(boundary, "endedAt", it) }
+            durationMs?.let { output.writeTextPart(boundary, "durationMs", it.toString()) }
+            output.writeTextPart(boundary, "mimeType", "audio/wav")
+            output.writeTextPart(boundary, "bargeIn", bargeIn.toString())
+            conversationStep?.let { output.writeTextPart(boundary, "conversationStep", it) }
+            output.write("--$boundary\r\n".toByteArray())
+            output.write(
+                "Content-Disposition: form-data; name=\"audio\"; filename=\"speech.wav\"\r\n"
+                    .toByteArray(),
+            )
+            output.write("Content-Type: audio/wav\r\n\r\n".toByteArray())
+            audioFile.inputStream().use { it.copyTo(output) }
+            output.write("\r\n--$boundary--\r\n".toByteArray())
+        }
+
+        val response = readResponse(connection)
+        AutoVoiceTurnResponse(
+            turnId = response.getString("turnId"),
+            clientTurnId = response.getString("clientTurnId"),
+            sessionId = response.getString("sessionId"),
+            userText = response.optString("userText"),
+            assistantText = response.optString("assistantText"),
+            audioMimeType = response.optNullableString("audioMimeType"),
+            audioBase64 = response.optNullableString("audioBase64"),
+            conversationStep = response.optNullableString("conversationStep"),
+            nextAction = response.optString("nextAction", "play_audio"),
+            failed = response.optBoolean("failed", false),
+            riskFlag = response.optBoolean("riskFlag", false),
+            riskType = response.optNullableString("riskType"),
+        )
+    }
+
     private fun JSONObject.toCallInvitationResponse(): CallInvitationResponse =
         CallInvitationResponse(
             id = getString("id"),
@@ -228,6 +298,17 @@ class YeoboSayApi(
             connection.outputStream.bufferedWriter().use { it.write(body.toString()) }
         }
         return readResponse(connection)
+    }
+
+    private fun BufferedOutputStream.writeTextPart(
+        boundary: String,
+        name: String,
+        value: String,
+    ) {
+        write("--$boundary\r\n".toByteArray())
+        write("Content-Disposition: form-data; name=\"$name\"\r\n\r\n".toByteArray())
+        write(value.toByteArray())
+        write("\r\n".toByteArray())
     }
 
     private fun openConnection(method: String, path: String): HttpURLConnection {

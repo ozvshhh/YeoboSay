@@ -19,6 +19,10 @@ import { OpenAiService } from '../openai/openai.service';
 import type { AssistantMessage } from '../openai/openai.service';
 import { PrismaService } from '../prisma/prisma.service';
 import {
+  AutoVoiceTurnResponseDto,
+  AutoVoiceTurnUploadDto,
+} from './auto-voice-turn.dto';
+import {
   AudioPolicyResponseDto,
   CallSessionResponseDto,
   ConversationPolicyResponseDto,
@@ -41,6 +45,16 @@ const AUTO_CONVERSATION_FIRST_GREETING =
 const AUTO_CONVERSATION_NO_RESPONSE_PROMPT = '여보세요? 제 말 들리세요?';
 const AUTO_CONVERSATION_MAX_DURATION_CLOSING =
   '어르신 아쉽지만 오늘 통화는 여기까지에요.';
+const AUTO_TURN_MOCK_USER_TEXT = '자동 발화가 접수됐어요.';
+const AUTO_TURN_MOCK_ASSISTANT_TEXT =
+  '말씀을 잘 받았어요. 다음 단계에서 실제 AI 답변으로 연결할게요.';
+const TERMINAL_TURN_STATUSES = new Set<ConversationTurnStatus>([
+  ConversationTurnStatus.COMPLETED,
+  ConversationTurnStatus.FAILED_STT,
+  ConversationTurnStatus.FAILED_LLM,
+  ConversationTurnStatus.FAILED_TTS,
+  ConversationTurnStatus.FAILED_UNKNOWN,
+]);
 
 const AUTO_AUDIO_POLICY: AudioPolicyResponseDto = {
   silenceTimeoutMs: 3000,
@@ -274,6 +288,120 @@ export class CallSessionsService {
     }
   }
 
+  async processAutoAudioTurn(
+    id: string,
+    dto: AutoVoiceTurnUploadDto,
+    audio?: Express.Multer.File,
+  ): Promise<AutoVoiceTurnResponseDto> {
+    const session = await this.prisma.callSession.findUnique({
+      where: { id },
+    });
+
+    if (!session) {
+      throw new NotFoundException('Call session not found.');
+    }
+
+    if (session.mode !== CallSessionMode.AUTO_CONVERSATION) {
+      throw new BadRequestException(
+        'Automatic turns require an auto conversation session.',
+      );
+    }
+
+    if (!this.isAutoTurnSessionProcessable(session.status)) {
+      throw new ConflictException(
+        `Call session cannot process an automatic turn while ${session.status}.`,
+      );
+    }
+
+    if (session.expiresAt.getTime() <= Date.now()) {
+      throw new ConflictException('Call session is expired.');
+    }
+
+    this.validateAudioUpload(audio);
+
+    const existingTurn = await this.prisma.conversationTurn.findFirst({
+      where: {
+        callSessionId: id,
+        clientTurnId: dto.clientTurnId,
+        role: ConversationRole.USER,
+      },
+    });
+
+    if (existingTurn) {
+      if (TERMINAL_TURN_STATUSES.has(existingTurn.status)) {
+        const assistantTurn = await this.findAssistantTurnAfter(existingTurn);
+        return this.toAutoVoiceTurnResponse(existingTurn, assistantTurn);
+      }
+
+      throw new ConflictException(
+        'Automatic turn with the same clientTurnId is still processing.',
+      );
+    }
+
+    this.demoLogger.voiceTurnStarted(
+      id,
+      audio.originalname || 'auto-turn.m4a',
+      audio.mimetype,
+      audio.size ?? audio.buffer.length,
+    );
+
+    const conversationStep = this.toPrismaConversationStep(
+      dto.conversationStep,
+    );
+    const userTurn = await this.prisma.conversationTurn.create({
+      data: {
+        callSessionId: id,
+        clientTurnId: dto.clientTurnId,
+        role: ConversationRole.USER,
+        text: AUTO_TURN_MOCK_USER_TEXT,
+        status: ConversationTurnStatus.UPLOADED,
+        conversationStep,
+        bargeIn: dto.bargeIn === 'true',
+      },
+    });
+
+    await this.prisma.callSession.update({
+      where: { id },
+      data: { status: CallSessionStatus.PROCESSING_TURN },
+    });
+
+    const completedUserTurn = await this.prisma.conversationTurn.update({
+      where: { id: userTurn.id },
+      data: {
+        status: ConversationTurnStatus.COMPLETED,
+        completedAt: new Date(),
+      },
+    });
+
+    const assistantTurn = await this.prisma.conversationTurn.create({
+      data: {
+        callSessionId: id,
+        role: ConversationRole.ASSISTANT,
+        text: AUTO_TURN_MOCK_ASSISTANT_TEXT,
+        status: ConversationTurnStatus.COMPLETED,
+        conversationStep,
+        completedAt: new Date(),
+      },
+    });
+
+    await this.prisma.callSession.update({
+      where: { id },
+      data: {
+        status: CallSessionStatus.AI_SPEAKING,
+        currentStep: conversationStep ?? session.currentStep,
+        turnCount: { increment: 1 },
+      },
+    });
+
+    this.demoLogger.assistantTextGenerated(
+      id,
+      AUTO_TURN_MOCK_ASSISTANT_TEXT,
+      false,
+    );
+
+    return this.toAutoVoiceTurnResponse(completedUserTurn, assistantTurn);
+  }
+
   async end(id: string): Promise<CallSessionResponseDto> {
     const session = await this.prisma.callSession.findUnique({
       where: { id },
@@ -364,6 +492,42 @@ export class CallSessionsService {
     );
 
     return matchedRisk?.type ?? null;
+  }
+
+  private isAutoTurnSessionProcessable(status: CallSessionStatus): boolean {
+    const processableStatuses: CallSessionStatus[] = [
+      CallSessionStatus.ACTIVE,
+      CallSessionStatus.WAITING_FOR_USER,
+      CallSessionStatus.AI_SPEAKING,
+    ];
+
+    return processableStatuses.includes(status);
+  }
+
+  private toPrismaConversationStep(
+    step?: string,
+  ): ConversationStep | undefined {
+    if (!step) return undefined;
+
+    const normalizedStep = step.toUpperCase();
+    const validStep = Object.values(ConversationStep).find(
+      (value) => value === normalizedStep,
+    );
+
+    return validStep;
+  }
+
+  private async findAssistantTurnAfter(
+    userTurn: ConversationTurn,
+  ): Promise<ConversationTurn | null> {
+    return this.prisma.conversationTurn.findFirst({
+      where: {
+        callSessionId: userTurn.callSessionId,
+        role: ConversationRole.ASSISTANT,
+        createdAt: { gte: userTurn.createdAt },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
   }
 
   private async buildAssistantMessages(
@@ -471,6 +635,28 @@ export class CallSessionsService {
       riskFlag: turn.riskFlag,
       riskType: turn.riskType,
       createdAt: turn.createdAt.toISOString(),
+    };
+  }
+
+  private toAutoVoiceTurnResponse(
+    userTurn: ConversationTurn,
+    assistantTurn: ConversationTurn | null,
+  ): AutoVoiceTurnResponseDto {
+    const failed = userTurn.failed || Boolean(assistantTurn?.failed);
+
+    return {
+      turnId: userTurn.id,
+      clientTurnId: userTurn.clientTurnId ?? '',
+      sessionId: userTurn.callSessionId,
+      userText: userTurn.text,
+      assistantText: assistantTurn?.text ?? AUTO_TURN_MOCK_ASSISTANT_TEXT,
+      audioMimeType: null,
+      audioBase64: null,
+      conversationStep: this.toApiConversationStep(userTurn.conversationStep),
+      nextAction: failed ? 'listen_again' : 'play_audio',
+      failed,
+      riskFlag: userTurn.riskFlag || Boolean(assistantTurn?.riskFlag),
+      riskType: userTurn.riskType ?? assistantTurn?.riskType ?? null,
     };
   }
 }
