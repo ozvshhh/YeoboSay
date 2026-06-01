@@ -9,6 +9,10 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 
+private const val DEFAULT_API_BASE_URL =
+    "https://1039-2001-e60-ce42-5361-c1cf-deff-ddb1-ba82.ngrok-free.app"
+private const val LOCAL_API_BASE_URL = "http://10.0.2.2:3000"
+
 data class CallSessionResponse(
     val id: String,
     val status: String,
@@ -94,7 +98,8 @@ enum class CallSessionMode(val apiValue: String) {
 }
 
 class YeoboSayApi(
-    private val baseUrl: String = "https://1039-2001-e60-ce42-5361-c1cf-deff-ddb1-ba82.ngrok-free.app",
+    private val baseUrl: String = DEFAULT_API_BASE_URL,
+    private val fallbackBaseUrl: String = LOCAL_API_BASE_URL,
 ) {
     suspend fun createCallSession(
         mode: CallSessionMode = CallSessionMode.ManualRecording,
@@ -150,26 +155,31 @@ class YeoboSayApi(
     suspend fun uploadAudioTurn(callSessionId: String, audioFile: File): VoiceTurnResponse =
         withContext(Dispatchers.IO) {
             val boundary = "YeoboSayBoundary${System.currentTimeMillis()}"
-            val connection = openConnection(
-                method = "POST",
-                path = "/call-sessions/$callSessionId/turns/audio",
-            ).apply {
-                doOutput = true
-                setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+            val response = requestWithFallback("/call-sessions/$callSessionId/turns/audio") {
+                requestBaseUrl ->
+                val connection = openConnection(
+                    method = "POST",
+                    path = "/call-sessions/$callSessionId/turns/audio",
+                    requestBaseUrl = requestBaseUrl,
+                ).apply {
+                    doOutput = true
+                    setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+                }
+
+                BufferedOutputStream(connection.outputStream).use { output ->
+                    output.write("--$boundary\r\n".toByteArray())
+                    output.write(
+                        "Content-Disposition: form-data; name=\"audio\"; filename=\"speech.m4a\"\r\n"
+                            .toByteArray(),
+                    )
+                    output.write("Content-Type: audio/mp4\r\n\r\n".toByteArray())
+                    audioFile.inputStream().use { it.copyTo(output) }
+                    output.write("\r\n--$boundary--\r\n".toByteArray())
+                }
+
+                readResponse(connection)
             }
 
-            BufferedOutputStream(connection.outputStream).use { output ->
-                output.write("--$boundary\r\n".toByteArray())
-                output.write(
-                    "Content-Disposition: form-data; name=\"audio\"; filename=\"speech.m4a\"\r\n"
-                        .toByteArray(),
-                )
-                output.write("Content-Type: audio/mp4\r\n\r\n".toByteArray())
-                audioFile.inputStream().use { it.copyTo(output) }
-                output.write("\r\n--$boundary--\r\n".toByteArray())
-            }
-
-            val response = readResponse(connection)
             VoiceTurnResponse(
                 callSessionId = response.getString("callSessionId"),
                 userText = response.optString("userText"),
@@ -193,34 +203,39 @@ class YeoboSayApi(
         conversationStep: String? = null,
     ): AutoVoiceTurnResponse = withContext(Dispatchers.IO) {
         val boundary = "YeoboSayBoundary${System.currentTimeMillis()}"
-        val connection = openConnection(
-            method = "POST",
-            path = "/call-sessions/$callSessionId/auto-turns/audio",
-        ).apply {
-            doOutput = true
-            setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+        val response = requestWithFallback("/call-sessions/$callSessionId/auto-turns/audio") {
+            requestBaseUrl ->
+            val connection = openConnection(
+                method = "POST",
+                path = "/call-sessions/$callSessionId/auto-turns/audio",
+                requestBaseUrl = requestBaseUrl,
+            ).apply {
+                doOutput = true
+                setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+            }
+
+            BufferedOutputStream(connection.outputStream).use { output ->
+                output.writeTextPart(boundary, "clientTurnId", clientTurnId)
+                output.writeTextPart(boundary, "mode", CallSessionMode.AutoConversation.apiValue)
+                startedAt?.let { output.writeTextPart(boundary, "startedAt", it) }
+                endedAt?.let { output.writeTextPart(boundary, "endedAt", it) }
+                durationMs?.let { output.writeTextPart(boundary, "durationMs", it.toString()) }
+                output.writeTextPart(boundary, "mimeType", "audio/wav")
+                output.writeTextPart(boundary, "bargeIn", bargeIn.toString())
+                conversationStep?.let { output.writeTextPart(boundary, "conversationStep", it) }
+                output.write("--$boundary\r\n".toByteArray())
+                output.write(
+                    "Content-Disposition: form-data; name=\"audio\"; filename=\"speech.wav\"\r\n"
+                        .toByteArray(),
+                )
+                output.write("Content-Type: audio/wav\r\n\r\n".toByteArray())
+                audioFile.inputStream().use { it.copyTo(output) }
+                output.write("\r\n--$boundary--\r\n".toByteArray())
+            }
+
+            readResponse(connection)
         }
 
-        BufferedOutputStream(connection.outputStream).use { output ->
-            output.writeTextPart(boundary, "clientTurnId", clientTurnId)
-            output.writeTextPart(boundary, "mode", CallSessionMode.AutoConversation.apiValue)
-            startedAt?.let { output.writeTextPart(boundary, "startedAt", it) }
-            endedAt?.let { output.writeTextPart(boundary, "endedAt", it) }
-            durationMs?.let { output.writeTextPart(boundary, "durationMs", it.toString()) }
-            output.writeTextPart(boundary, "mimeType", "audio/wav")
-            output.writeTextPart(boundary, "bargeIn", bargeIn.toString())
-            conversationStep?.let { output.writeTextPart(boundary, "conversationStep", it) }
-            output.write("--$boundary\r\n".toByteArray())
-            output.write(
-                "Content-Disposition: form-data; name=\"audio\"; filename=\"speech.wav\"\r\n"
-                    .toByteArray(),
-            )
-            output.write("Content-Type: audio/wav\r\n\r\n".toByteArray())
-            audioFile.inputStream().use { it.copyTo(output) }
-            output.write("\r\n--$boundary--\r\n".toByteArray())
-        }
-
-        val response = readResponse(connection)
         AutoVoiceTurnResponse(
             turnId = response.getString("turnId"),
             clientTurnId = response.getString("clientTurnId"),
@@ -291,13 +306,15 @@ class YeoboSayApi(
     }
 
     private fun requestJson(method: String, path: String, body: JSONObject? = null): JSONObject {
-        val connection = openConnection(method, path)
-        if (body != null) {
-            connection.doOutput = true
-            connection.setRequestProperty("Content-Type", "application/json")
-            connection.outputStream.bufferedWriter().use { it.write(body.toString()) }
+        return requestWithFallback(path) { requestBaseUrl ->
+            val connection = openConnection(method, path, requestBaseUrl)
+            if (body != null) {
+                connection.doOutput = true
+                connection.setRequestProperty("Content-Type", "application/json")
+                connection.outputStream.bufferedWriter().use { it.write(body.toString()) }
+            }
+            readResponse(connection)
         }
-        return readResponse(connection)
     }
 
     private fun BufferedOutputStream.writeTextPart(
@@ -311,8 +328,30 @@ class YeoboSayApi(
         write("\r\n".toByteArray())
     }
 
-    private fun openConnection(method: String, path: String): HttpURLConnection {
+    private fun requestWithFallback(
+        path: String,
+        request: (requestBaseUrl: String) -> JSONObject,
+    ): JSONObject {
         val normalizedBaseUrl = baseUrl.trimEnd('/')
+        val normalizedFallbackBaseUrl = fallbackBaseUrl.trimEnd('/')
+
+        return try {
+            request(normalizedBaseUrl)
+        } catch (error: ApiHttpException) {
+            if (error.statusCode == 404 && normalizedFallbackBaseUrl != normalizedBaseUrl) {
+                request(normalizedFallbackBaseUrl)
+            } else {
+                throw error
+            }
+        }
+    }
+
+    private fun openConnection(
+        method: String,
+        path: String,
+        requestBaseUrl: String,
+    ): HttpURLConnection {
+        val normalizedBaseUrl = requestBaseUrl.trimEnd('/')
         return (URL("$normalizedBaseUrl$path").openConnection() as HttpURLConnection).apply {
             requestMethod = method
             connectTimeout = 15_000
@@ -327,8 +366,16 @@ class YeoboSayApi(
         val body = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
         if (code !in 200..299) {
             val message = runCatching { JSONObject(body).optString("message") }.getOrNull()
-            throw IllegalStateException(message?.takeIf { it.isNotBlank() } ?: "HTTP $code")
+            throw ApiHttpException(
+                statusCode = code,
+                detail = message?.takeIf { it.isNotBlank() } ?: "HTTP $code",
+            )
         }
         return JSONObject(body)
     }
 }
+
+private class ApiHttpException(
+    val statusCode: Int,
+    detail: String,
+) : IllegalStateException(detail)
