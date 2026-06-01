@@ -94,7 +94,7 @@ enum class CallSessionMode(val apiValue: String) {
 }
 
 class YeoboSayApi(
-    private val baseUrl: String = "http://10.0.2.2:3000",
+    private val baseUrl: String = "https://1039-2001-e60-ce42-5361-c1cf-deff-ddb1-ba82.ngrok-free.app",
 ) {
     suspend fun createCallSession(
         mode: CallSessionMode = CallSessionMode.ManualRecording,
