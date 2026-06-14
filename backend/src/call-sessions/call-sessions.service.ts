@@ -41,7 +41,7 @@ const SUPPORTED_AUDIO_MIME_TYPE = 'audio/mp4';
 const ASSISTANT_FAILURE_MESSAGE =
   '응답을 만드는 중 문제가 생겼어요. 잠시 후 다시 말해 주세요.';
 const AUTO_CONVERSATION_FIRST_GREETING =
-  '안녕하세요 왕송길 어르신 AI통화 서비스 세요입니다!';
+  '어르신 세요가 아침인사 드립니다! 잠은 편히 주무셨나요? 오늘의 기분은 어떠세요?';
 const AUTO_CONVERSATION_NO_RESPONSE_PROMPT = '여보세요? 제 말 들리세요?';
 const AUTO_CONVERSATION_MAX_DURATION_CLOSING =
   '어르신 아쉽지만 오늘 통화는 여기까지에요.';
@@ -138,15 +138,9 @@ export class CallSessionsService {
 
     this.demoLogger.callSessionCreated(session.id, session.expiresAt);
 
-    const firstGreetingAudio = isAutoConversation
-      ? await this.createFirstGreetingAudio(session.id)
-      : null;
+    const firstGreetingAudio = await this.createFirstGreetingAudio(session.id);
 
-    return this.toCallSessionResponse(
-      session,
-      isAutoConversation,
-      firstGreetingAudio,
-    );
+    return this.toCallSessionResponse(session, true, firstGreetingAudio);
   }
 
   async findOne(id: string): Promise<CallSessionResponseDto> {

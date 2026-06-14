@@ -123,8 +123,27 @@ describe('CallSessionsService', () => {
 
   it('creates an active call session with a 10 minute expiration', async () => {
     prisma.callSession.create.mockResolvedValue(baseSession);
+    openAiService.synthesizeSpeech.mockResolvedValue(Buffer.from('greeting'));
 
-    await expect(service.create()).resolves.toEqual(baseSessionResponse);
+    await expect(service.create()).resolves.toEqual({
+      ...baseSessionResponse,
+      audioPolicy: {
+        silenceTimeoutMs: 3000,
+        maxUtteranceMs: 30000,
+        uploadMimeType: 'audio/mp4',
+        bargeInEnabled: true,
+      },
+      conversationPolicy: {
+        firstGreetingText:
+          '어르신 세요가 아침인사 드립니다! 잠은 편히 주무셨나요? 오늘의 기분은 어떠세요?',
+        firstGreetingAudioMimeType: 'audio/mpeg',
+        firstGreetingAudioBase64: Buffer.from('greeting').toString('base64'),
+        noResponsePromptText: '여보세요? 제 말 들리세요?',
+        maxDurationClosingText: '어르신 아쉽지만 오늘 통화는 여기까지에요.',
+        targetTurnCount: 5,
+        maxDurationSeconds: 600,
+      },
+    });
     expect(prisma.callSession.create).toHaveBeenCalledWith({
       data: {
         mode: CallSessionMode.MANUAL_RECORDING,
@@ -137,6 +156,9 @@ describe('CallSessionsService', () => {
     expect(demoLogger.callSessionCreated).toHaveBeenCalledWith(
       'session-1',
       expiresAt,
+    );
+    expect(openAiService.synthesizeSpeech).toHaveBeenCalledWith(
+      '어르신 세요가 아침인사 드립니다! 잠은 편히 주무셨나요? 오늘의 기분은 어떠세요?',
     );
   });
 
@@ -162,7 +184,8 @@ describe('CallSessionsService', () => {
         bargeInEnabled: true,
       },
       conversationPolicy: {
-        firstGreetingText: '안녕하세요 왕송길 어르신 AI통화 서비스 세요입니다!',
+        firstGreetingText:
+          '어르신 세요가 아침인사 드립니다! 잠은 편히 주무셨나요? 오늘의 기분은 어떠세요?',
         firstGreetingAudioMimeType: 'audio/mpeg',
         firstGreetingAudioBase64: Buffer.from('greeting').toString('base64'),
         noResponsePromptText: '여보세요? 제 말 들리세요?',
@@ -184,14 +207,14 @@ describe('CallSessionsService', () => {
       data: {
         callSessionId: 'session-1',
         role: ConversationRole.ASSISTANT,
-        text: '안녕하세요 왕송길 어르신 AI통화 서비스 세요입니다!',
+        text: '어르신 세요가 아침인사 드립니다! 잠은 편히 주무셨나요? 오늘의 기분은 어떠세요?',
         status: ConversationTurnStatus.COMPLETED,
         conversationStep: ConversationStep.GREETING,
         completedAt: now,
       },
     });
     expect(openAiService.synthesizeSpeech).toHaveBeenCalledWith(
-      '안녕하세요 왕송길 어르신 AI통화 서비스 세요입니다!',
+      '어르신 세요가 아침인사 드립니다! 잠은 편히 주무셨나요? 오늘의 기분은 어떠세요?',
     );
   });
 
@@ -208,7 +231,7 @@ describe('CallSessionsService', () => {
       service.create({ mode: 'auto_conversation' }),
     ).rejects.toBeInstanceOf(BadGatewayException);
     expect(openAiService.synthesizeSpeech).toHaveBeenCalledWith(
-      '안녕하세요 왕송길 어르신 AI통화 서비스 세요입니다!',
+      '어르신 세요가 아침인사 드립니다! 잠은 편히 주무셨나요? 오늘의 기분은 어떠세요?',
     );
   });
 

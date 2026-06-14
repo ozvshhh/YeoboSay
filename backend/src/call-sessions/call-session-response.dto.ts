@@ -16,7 +16,8 @@ export class AudioPolicyResponseDto {
 
 export class ConversationPolicyResponseDto {
   @ApiProperty({
-    example: '안녕하세요 왕송길 어르신 AI통화 서비스 세요입니다!',
+    example:
+      '어르신 세요가 아침인사 드립니다! 잠은 편히 주무셨나요? 오늘의 기분은 어떠세요?',
   })
   firstGreetingText: string;
 
