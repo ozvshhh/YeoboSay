@@ -1,6 +1,13 @@
 package com.yeobosay.app.ui.call
 
 import android.app.Application
+import android.media.AudioManager
+import android.media.MediaPlayer
+import android.media.RingtoneManager
+import android.media.ToneGenerator
+import android.os.Bundle
+import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.yeobosay.app.data.AutoVoiceTurnResponse
@@ -22,7 +29,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.File
+import java.text.SimpleDateFormat
 import java.time.Instant
+import java.util.Date
+import java.util.Locale
 
 private const val MAX_RECORDING_MILLIS = 30_000L
 private const val MIN_RECORDING_MILLIS = 500L
@@ -31,6 +41,7 @@ private const val NEXT_ACTION_PLAY_AUDIO = "play_audio"
 private const val NEXT_ACTION_LISTEN_AGAIN = "listen_again"
 private const val NEXT_ACTION_END_CALL_AFTER_AUDIO = "end_call_after_audio"
 private const val NEXT_ACTION_FORCE_END = "force_end"
+private const val FIRST_GREETING_UTTERANCE_ID = "yeobosay-first-greeting"
 
 data class CallMessage(
     val role: MessageRole,
@@ -74,6 +85,14 @@ data class CallUiState(
     val speechNoiseFloor: Double = 0.0,
     val speechAudioSource: String = "-",
     val lastSpeechDurationMs: Long? = null,
+    val apiDebugStatus: String = "대기",
+    val apiDebugDetail: String = "서버로 보낸 음성이 아직 없습니다.",
+    val lastClientTurnId: String? = null,
+    val lastUploadSizeBytes: Long? = null,
+    val lastResponseHasAudio: Boolean? = null,
+    val showEndSummary: Boolean = false,
+    val lastCallDurationSeconds: Long = 0L,
+    val lastCallEndedAtText: String = "",
     val statusText: String = "통화 세션을 시작해 주세요.",
     val socketStatusText: String = "전화 수신 서버에 연결 중입니다.",
     val errorText: String? = null,
@@ -92,6 +111,12 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
     private val recorder = AudioRecorder(application.applicationContext)
     private val player = AudioPlayer(application.applicationContext)
     private val speechDetector = SpeechRmsDetector(application.applicationContext)
+    private var incomingCallRingtonePlayer: MediaPlayer? = null
+    private var greetingTts: TextToSpeech? = null
+    private var isGreetingTtsReady = false
+    private var pendingGreetingTtsText: String? = null
+    private var pendingGreetingTtsCompletion: (() -> Unit)? = null
+    private var activeGreetingTtsCompletion: (() -> Unit)? = null
 
     private val _uiState = MutableStateFlow(CallUiState())
     val uiState: StateFlow<CallUiState> = _uiState.asStateFlow()
@@ -103,6 +128,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
     private var autoTurnSequence: Int = 0
 
     init {
+        initializeGreetingTts(application)
         connectCallInvitationSocket()
     }
 
@@ -113,7 +139,9 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
     fun startSession() {
         if (_uiState.value.isStartingSession) return
 
+        stopIncomingCallRingtone()
         viewModelScope.launch {
+            _uiState.update { it.copy(showEndSummary = false) }
             createCallSession()
         }
     }
@@ -138,6 +166,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.update {
                 it.copy(
                     isRequestingTestCall = true,
+                    showEndSummary = false,
                     errorText = null,
                     statusText = "테스트 전화를 요청하는 중입니다.",
                 )
@@ -145,6 +174,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
 
             runCatching { api.createTestCallInvitation() }
                 .onSuccess { invitation ->
+                    playIncomingCallRingtone()
                     _uiState.update {
                         it.copy(
                             incomingCall = invitation.toIncomingCallUiState(),
@@ -166,16 +196,24 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun stopIncomingCallAlert() {
+        stopIncomingCallRingtone()
+    }
+
     fun acceptIncomingCall() {
         val incomingCall = _uiState.value.incomingCall ?: return
         if (_uiState.value.isAcceptingIncomingCall) return
 
+        stopIncomingCallRingtone()
+        playCallAcceptTone()
         viewModelScope.launch {
             _uiState.update {
                 it.copy(
+                    incomingCall = null,
                     isAcceptingIncomingCall = true,
+                    showEndSummary = false,
                     errorText = null,
-                    statusText = "전화를 받는 중입니다.",
+                    statusText = "통화를 연결합니다.",
                 )
             }
 
@@ -188,7 +226,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                         )
                     }
                     createCallSession(
-                        mode = CallSessionMode.AutoConversation,
+                        mode = CallSessionMode.ManualRecording,
                         source = "incoming_call",
                         callInvitationId = incomingCall.callInvitationId,
                     )
@@ -196,6 +234,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                 .onFailure { error ->
                     _uiState.update {
                         it.copy(
+                            incomingCall = incomingCall,
                             isAcceptingIncomingCall = false,
                             statusText = "전화 수락 실패",
                             errorText = error.message ?: "전화를 받을 수 없습니다.",
@@ -209,6 +248,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
         val incomingCall = _uiState.value.incomingCall ?: return
         if (_uiState.value.isDecliningIncomingCall) return
 
+        stopIncomingCallRingtone()
         viewModelScope.launch {
             _uiState.update {
                 it.copy(
@@ -240,6 +280,15 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun dismissEndSummary() {
+        _uiState.update {
+            it.copy(
+                showEndSummary = false,
+                statusText = "통화 세션을 시작해 주세요.",
+            )
+        }
+    }
+
     private fun connectCallInvitationSocket() {
         invitationSocket.connect(
             onConnected = {
@@ -249,6 +298,8 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update { it.copy(socketStatusText = "전화 수신 연결이 끊겼습니다.") }
             },
             onIncomingCall = { event ->
+                val shouldPlayRingtone = _uiState.value.callSessionId == null &&
+                    _uiState.value.incomingCall == null
                 _uiState.update {
                     if (it.callSessionId != null) {
                         it.copy(socketStatusText = "통화 중이라 새 전화를 표시하지 않았습니다.")
@@ -261,6 +312,9 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                         )
                     }
                 }
+                if (shouldPlayRingtone) {
+                    playIncomingCallRingtone()
+                }
             },
             onError = { message ->
                 _uiState.update { it.copy(socketStatusText = message) }
@@ -271,6 +325,10 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
     fun endSession() {
         val sessionId = _uiState.value.callSessionId ?: return
         if (_uiState.value.isEndingSession) return
+        val endedDurationSeconds = _uiState.value.callElapsedSeconds
+        val endedAtText = SimpleDateFormat("a h:mm", Locale.KOREAN).format(Date())
+        stopIncomingCallRingtone()
+        playCallEndTone()
 
         viewModelScope.launch {
             maxRecordingJob?.cancel()
@@ -278,6 +336,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
             if (_uiState.value.isRecording) recorder.cancel()
             stopAutoSpeechDetection()
             player.stop()
+            stopGreetingTts()
 
             _uiState.update {
                 it.copy(
@@ -304,6 +363,9 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                             isListening = false,
                             isUserSpeaking = false,
                             speechDebugStatus = "IDLE",
+                            showEndSummary = true,
+                            lastCallDurationSeconds = endedDurationSeconds,
+                            lastCallEndedAtText = endedAtText,
                             statusText = "통화가 종료되었습니다.",
                         )
                     }
@@ -325,6 +387,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
         source: String? = null,
         callInvitationId: String? = null,
     ) {
+        stopIncomingCallRingtone()
         _uiState.update {
             it.copy(
                 isStartingSession = true,
@@ -361,15 +424,11 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                         isAutoConversation = isAutoConversation,
                         isStartingSession = false,
                         isAcceptingIncomingCall = false,
-                        statusText = if (isAutoConversation) {
-                            "AI가 먼저 인사하고 있어요."
-                        } else {
-                            "녹음 버튼을 눌러 대화를 시작하세요."
-                        },
-                        isPlaying = isAutoConversation,
+                        statusText = "AI가 먼저 인사하고 있어요.",
+                        isPlaying = true,
                         isListening = false,
                         isUserSpeaking = false,
-                        speechDebugStatus = if (isAutoConversation) "AI_GREETING" else "MANUAL_READY",
+                        speechDebugStatus = "AI_GREETING",
                         messages = listOf(
                             CallMessage(
                                 role = MessageRole.Assistant,
@@ -379,11 +438,11 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
 
-                if (isAutoConversation) {
-                    playFirstGreeting(
-                        audioBase64 = conversationPolicy?.firstGreetingAudioBase64,
-                    )
-                }
+                playFirstGreeting(
+                    greetingText = greetingText,
+                    audioBase64 = conversationPolicy?.firstGreetingAudioBase64,
+                    shouldStartAutoListening = isAutoConversation,
+                )
             }
             .onFailure { error ->
                 _uiState.update {
@@ -415,33 +474,196 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
         callStartedAtMillis = 0L
     }
 
-    private fun playFirstGreeting(audioBase64: String?) {
+    private fun playFirstGreeting(
+        greetingText: String,
+        audioBase64: String?,
+        shouldStartAutoListening: Boolean,
+    ) {
         val serverAudioBase64 = audioBase64?.takeIf { it.isNotBlank() }
-        if (serverAudioBase64 == null) {
-            _uiState.update {
-                it.copy(
-                    isPlaying = false,
-                    isListening = false,
-                    isUserSpeaking = false,
-                    speechDebugStatus = "GREETING_AUDIO_MISSING",
-                    statusText = "첫 인사 음성을 받을 수 없습니다.",
-                    errorText = "서버 첫 인사 음성이 없어 재생하지 않았습니다.",
-                )
-            }
-            return
-        }
-
         val onComplete = {
             _uiState.update {
                 it.copy(
                     isPlaying = false,
-                    statusText = "말씀을 듣고 있어요.",
+                    speechDebugStatus = if (shouldStartAutoListening) {
+                        it.speechDebugStatus
+                    } else {
+                        "MANUAL_READY"
+                    },
+                    statusText = if (shouldStartAutoListening) {
+                        "말씀을 듣고 있어요."
+                    } else {
+                        "녹음 버튼을 눌러 이어서 말하세요."
+                    },
                 )
             }
-            startAutoSpeechDetection()
+            if (shouldStartAutoListening) {
+                startAutoSpeechDetection()
+            }
+        }
+
+        if (serverAudioBase64 == null) {
+            speakFirstGreeting(greetingText, onComplete)
+            return
         }
 
         player.playBase64Mp3(serverAudioBase64, onComplete)
+    }
+
+    private fun initializeGreetingTts(application: Application) {
+        greetingTts = TextToSpeech(application.applicationContext) { status ->
+            isGreetingTtsReady = status == TextToSpeech.SUCCESS
+            if (isGreetingTtsReady) {
+                greetingTts?.apply {
+                    language = Locale.KOREAN
+                    setSpeechRate(0.9f)
+                    setPitch(1.0f)
+                    setOnUtteranceProgressListener(
+                        object : UtteranceProgressListener() {
+                            override fun onStart(utteranceId: String?) = Unit
+
+                            override fun onDone(utteranceId: String?) {
+                                if (utteranceId == FIRST_GREETING_UTTERANCE_ID) {
+                                    completeGreetingTts()
+                                }
+                            }
+
+                            @Deprecated("Deprecated in Java")
+                            override fun onError(utteranceId: String?) {
+                                if (utteranceId == FIRST_GREETING_UTTERANCE_ID) {
+                                    completeGreetingTts()
+                                }
+                            }
+
+                            override fun onError(utteranceId: String?, errorCode: Int) {
+                                if (utteranceId == FIRST_GREETING_UTTERANCE_ID) {
+                                    completeGreetingTts()
+                                }
+                            }
+                        },
+                    )
+                }
+
+                val pendingText = pendingGreetingTtsText
+                val pendingCompletion = pendingGreetingTtsCompletion
+                pendingGreetingTtsText = null
+                pendingGreetingTtsCompletion = null
+                if (pendingText != null && pendingCompletion != null) {
+                    speakFirstGreeting(pendingText, pendingCompletion)
+                }
+            } else {
+                completePendingGreetingTts()
+            }
+        }
+    }
+
+    private fun speakFirstGreeting(greetingText: String, onComplete: () -> Unit) {
+        if (!isGreetingTtsReady) {
+            pendingGreetingTtsText = greetingText
+            pendingGreetingTtsCompletion = onComplete
+            return
+        }
+
+        activeGreetingTtsCompletion = onComplete
+        val result = greetingTts?.speak(
+            greetingText,
+            TextToSpeech.QUEUE_FLUSH,
+            Bundle.EMPTY,
+            FIRST_GREETING_UTTERANCE_ID,
+        )
+        if (result == TextToSpeech.ERROR) {
+            completeGreetingTts()
+        }
+    }
+
+    private fun completeGreetingTts() {
+        val onComplete = activeGreetingTtsCompletion
+        activeGreetingTtsCompletion = null
+        viewModelScope.launch {
+            onComplete?.invoke()
+        }
+    }
+
+    private fun completePendingGreetingTts() {
+        val onComplete = pendingGreetingTtsCompletion
+        pendingGreetingTtsText = null
+        pendingGreetingTtsCompletion = null
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    isPlaying = false,
+                    speechDebugStatus = "GREETING_TTS_UNAVAILABLE",
+                    statusText = "녹음 버튼을 눌러 이어서 말하세요.",
+                    errorText = "기기 TTS를 사용할 수 없어 첫 인사 음성을 재생하지 못했습니다.",
+                )
+            }
+            onComplete?.invoke()
+        }
+    }
+
+    private fun stopGreetingTts() {
+        pendingGreetingTtsText = null
+        pendingGreetingTtsCompletion = null
+        activeGreetingTtsCompletion = null
+        greetingTts?.stop()
+    }
+
+    private fun playIncomingCallRingtone() {
+        stopIncomingCallRingtone()
+
+        val context = getApplication<Application>().applicationContext
+        val ringtoneUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+            ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+            ?: return
+
+        runCatching {
+            val mediaPlayer = MediaPlayer.create(context, ringtoneUri) ?: return
+            mediaPlayer.setOnErrorListener { player, _, _ ->
+                runCatching {
+                    player.stop()
+                    player.release()
+                }
+                if (incomingCallRingtonePlayer === player) {
+                    incomingCallRingtonePlayer = null
+                }
+                true
+            }
+            mediaPlayer.isLooping = true
+            incomingCallRingtonePlayer = mediaPlayer
+            mediaPlayer.start()
+        }
+    }
+
+    private fun stopIncomingCallRingtone() {
+        val mediaPlayer = incomingCallRingtonePlayer
+        incomingCallRingtonePlayer = null
+        runCatching {
+            if (mediaPlayer?.isPlaying == true) {
+                mediaPlayer.stop()
+            }
+            mediaPlayer?.release()
+        }
+    }
+
+    private fun playCallAcceptTone() {
+        runCatching {
+            val toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, 85)
+            toneGenerator.startTone(ToneGenerator.TONE_PROP_ACK, 140)
+            viewModelScope.launch {
+                delay(200L)
+                toneGenerator.release()
+            }
+        }
+    }
+
+    private fun playCallEndTone() {
+        runCatching {
+            val toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, 85)
+            toneGenerator.startTone(ToneGenerator.TONE_PROP_PROMPT, 180)
+            viewModelScope.launch {
+                delay(240L)
+                toneGenerator.release()
+            }
+        }
     }
 
     private fun startAutoSpeechDetection() {
@@ -460,6 +682,8 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                 isListening = true,
                 isUserSpeaking = false,
                 speechDebugStatus = "LISTENING",
+                apiDebugStatus = "대기",
+                apiDebugDetail = "사용자 음성을 감지하면 서버로 전송합니다.",
                 statusText = "말씀을 듣고 있어요.",
                 errorText = null,
             )
@@ -543,6 +767,9 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.update {
                 it.copy(
                     speechDebugStatus = "AUTO_AUDIO_FILE_MISSING",
+                    apiDebugStatus = "음성 발송 취소",
+                    apiDebugDetail = "발화 파일이 비어 있어 서버로 보내지 않았습니다.",
+                    lastResponseHasAudio = null,
                     statusText = "음성 파일을 만들지 못했습니다.",
                     errorText = "발화 파일이 비어 있어 업로드하지 않았습니다.",
                 )
@@ -554,19 +781,25 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
         val clientTurnId = nextAutoClientTurnId(sessionId)
         val endedAt = Instant.now()
         val startedAt = endedAt.minusMillis(durationMs.coerceAtLeast(0L))
+        val uploadSizeBytes = audioFile.length()
+
+        _uiState.update {
+            it.copy(
+                isUploading = true,
+                isListening = false,
+                isUserSpeaking = false,
+                speechDebugStatus = "AUTO_UPLOADING",
+                apiDebugStatus = "음성 발송 중",
+                apiDebugDetail = "서버에 음성 파일을 보내고 있습니다.",
+                lastClientTurnId = clientTurnId,
+                lastUploadSizeBytes = uploadSizeBytes,
+                lastResponseHasAudio = null,
+                statusText = "말씀을 서버로 보내는 중입니다.",
+                errorText = null,
+            )
+        }
 
         viewModelScope.launch {
-            _uiState.update {
-                it.copy(
-                    isUploading = true,
-                    isListening = false,
-                    isUserSpeaking = false,
-                    speechDebugStatus = "AUTO_UPLOADING",
-                    statusText = "말씀을 서버로 보내는 중입니다.",
-                    errorText = null,
-                )
-            }
-
             runCatching {
                 api.uploadAutoAudioTurn(
                     callSessionId = sessionId,
@@ -579,6 +812,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }.onSuccess { response ->
                 audioFile.delete()
+                val hasResponseAudio = !response.audioBase64.isNullOrBlank()
                 val messages = buildList {
                     addAll(_uiState.value.messages)
                     if (response.userText.isNotBlank()) {
@@ -605,6 +839,13 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                         messages = messages,
                         isUploading = false,
                         speechDebugStatus = "AUTO_RESPONSE_READY",
+                        apiDebugStatus = "응답 도착",
+                        apiDebugDetail = if (hasResponseAudio) {
+                            "서버 응답과 응답 음성이 도착했습니다."
+                        } else {
+                            "서버 응답은 도착했지만 응답 음성이 없습니다."
+                        },
+                        lastResponseHasAudio = hasResponseAudio,
                         statusText = if (response.failed) {
                             "응답 처리에 실패했습니다."
                         } else {
@@ -621,6 +862,9 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                     it.copy(
                         isUploading = false,
                         speechDebugStatus = "AUTO_UPLOAD_FAILED",
+                        apiDebugStatus = "음성 발송 실패",
+                        apiDebugDetail = error.message ?: "자동 발화 업로드에 실패했습니다.",
+                        lastResponseHasAudio = null,
                         statusText = "자동 업로드 실패",
                         errorText = error.message ?: "자동 발화 업로드에 실패했습니다.",
                     )
@@ -669,6 +913,8 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                 it.copy(
                     isPlaying = false,
                     speechDebugStatus = "AUTO_RESPONSE_AUDIO_MISSING",
+                    apiDebugStatus = "응답 음성 없음",
+                    apiDebugDetail = "텍스트 응답은 받았지만 재생할 음성 데이터가 없습니다.",
                     statusText = "응답 음성 없이 다음 단계로 넘어갑니다.",
                 )
             }
@@ -682,6 +928,8 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                 isListening = false,
                 isUserSpeaking = false,
                 speechDebugStatus = "AI_PLAYING",
+                apiDebugStatus = "응답 음성 재생 중",
+                apiDebugDetail = "서버에서 받은 응답 음성을 재생하고 있습니다.",
                 statusText = "AI가 답변하고 있어요.",
                 errorText = null,
             )
@@ -693,6 +941,8 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                     it.copy(
                         isPlaying = false,
                         speechDebugStatus = "AI_PLAYBACK_COMPLETED",
+                        apiDebugStatus = "응답 음성 재생 완료",
+                        apiDebugDetail = "응답 음성 재생을 마치고 다시 듣기 상태로 전환합니다.",
                     )
                 }
                 onComplete()
@@ -702,6 +952,8 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                 it.copy(
                     isPlaying = false,
                     speechDebugStatus = "AI_PLAYBACK_FAILED",
+                    apiDebugStatus = "응답 음성 재생 실패",
+                    apiDebugDetail = error.message ?: "AI 응답 음성 재생에 실패했습니다.",
                     statusText = "응답 음성을 재생하지 못했습니다.",
                     errorText = error.message ?: "AI 응답 음성 재생에 실패했습니다.",
                 )
@@ -718,6 +970,8 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                 isPlaying = false,
                 isListening = false,
                 isUserSpeaking = false,
+                apiDebugStatus = "대기",
+                apiDebugDetail = "응답 재생 후 다음 사용자 음성을 기다립니다.",
                 statusText = statusText,
             )
         }
@@ -881,6 +1135,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
 
     fun stopPlayback() {
         player.stop()
+        stopGreetingTts()
         val shouldListen = _uiState.value.isAutoConversation && _uiState.value.callSessionId != null
         _uiState.update { it.copy(isPlaying = false, statusText = "재생을 중지했습니다.") }
         if (shouldListen) startAutoSpeechDetection()
@@ -893,6 +1148,10 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
         speechDetector.release()
         recorder.cancel()
         player.stop()
+        stopIncomingCallRingtone()
+        stopGreetingTts()
+        greetingTts?.shutdown()
+        greetingTts = null
         super.onCleared()
     }
 }

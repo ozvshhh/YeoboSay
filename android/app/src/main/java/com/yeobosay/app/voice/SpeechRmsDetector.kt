@@ -28,7 +28,8 @@ data class SpeechDetectionConfig(
     val minSpeechMs: Long = 500L,
     val speechEndSilenceMs: Long = 1_300L,
     val maxUtteranceMs: Long = 12_000L,
-    val minRmsThreshold: Double = 0.018,
+    val minRmsThreshold: Double = 0.085,
+    val noiseRmsThreshold: Double = 0.045,
     val noiseMultiplier: Double = 3.2,
 )
 
@@ -137,7 +138,7 @@ class SpeechRmsDetector(
         var isSpeaking = false
         var speechStartedAt = 0L
         var lastSpeechAt = 0L
-        var noiseFloor = config.minRmsThreshold / config.noiseMultiplier
+        val noiseFloor = config.noiseRmsThreshold
 
         try {
             record.startRecording()
@@ -147,12 +148,8 @@ class SpeechRmsDetector(
 
                 val now = System.currentTimeMillis()
                 val rms = AudioLevelMath.rmsPcm16(buffer, readCount)
-                val threshold = max(config.minRmsThreshold, noiseFloor * config.noiseMultiplier)
+                val threshold = config.minRmsThreshold
                 val hasVoice = rms >= threshold
-
-                if (!isSpeaking && !hasVoice) {
-                    noiseFloor = (noiseFloor * 0.94) + (rms * 0.06)
-                }
 
                 val snapshot = SpeechDetectionSnapshot(
                     rms = rms,

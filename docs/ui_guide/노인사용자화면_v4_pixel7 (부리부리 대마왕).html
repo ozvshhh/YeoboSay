@@ -1,0 +1,704 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>AI 안부 전화</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&display=swap" rel="stylesheet">
+<style>
+/* ── Reset ── */
+*, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
+html, body { width:100%; height:100%; overflow:hidden; background:#1a1a2e; }
+
+/* ══════════════════════════════════════
+   PIXEL 7 기준 반응형 레이아웃
+   실제 폰: 412 × 915 CSS px (논리해상도)
+   프레임 내 표시: 360px 폭 유지, 전체 높이에 맞춤
+══════════════════════════════════════ */
+
+/* 배경 */
+body {
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-family:'Noto Sans KR', sans-serif;
+  background: radial-gradient(ellipse at 30% 20%, #2d1b69 0%, #1a1a2e 50%, #0d0d1a 100%);
+  min-height:100dvh;
+}
+
+/* 폰 프레임 */
+.phone {
+  position:relative;
+  width: min(360px, 100vw);
+  /* Pixel 7 비율: 155.6mm × 73.2mm → 높이/폭 ≈ 2.124, 360px × 2.124 ≈ 764px */
+  height: min(764px, 100dvh);
+  border-radius: clamp(0px, calc((100vw - 359px) * 999), 46px);
+  overflow:hidden;
+  border:2px solid #555;
+  box-shadow: 0 0 0 5px #333, 0 0 0 6.5px #555, 0 30px 80px rgba(0,0,0,0.7);
+  display:flex;
+  flex-direction:column;
+}
+
+/* 화면 전환 */
+.screen {
+  display:none;
+  flex-direction:column;
+  width:100%;
+  height:100%;
+  position:absolute;
+  top:0; left:0;
+}
+.screen.active { display:flex; }
+
+/* 그라디언트 배경 */
+.light-bg {
+  background: linear-gradient(135deg,#f0e6ff 0%,#fce4f0 25%,#e8d8f8 50%,#ffd6e8 75%,#e4d4f8 100%);
+  background-size:300% 300%;
+  animation: gradFlow 6s ease infinite;
+}
+@keyframes gradFlow {
+  0%   { background-position:0% 50% }
+  50%  { background-position:100% 50% }
+  100% { background-position:0% 50% }
+}
+
+/* ── 상단 상태바 ── */
+.sb {
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  padding: 13px 22px 0;
+  font-size:14px;
+  font-weight:700;
+  flex-shrink:0;
+}
+.sb-icons { display:flex; align-items:center; gap:5px; }
+.sb-icons svg { display:block; }
+
+/* ── 홈 바 ── */
+.home-bar { height:34px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+.hb-light { width:120px; height:4px; border-radius:2px; background:rgba(80,40,120,0.2); }
+.hb-dark  { width:120px; height:4px; border-radius:2px; background:rgba(0,0,0,0.15); }
+
+/* ══════════════════════════════════════
+   1화면: 전화 수신 (INCOMING)
+══════════════════════════════════════ */
+#sc-in { background:linear-gradient(135deg,#f0e6ff 0%,#fce4f0 25%,#e8d8f8 50%,#ffd6e8 75%,#e4d4f8 100%); background-size:300% 300%; animation:gradFlow 6s ease infinite; }
+
+.in-caller-area {
+  flex:1;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  padding: 0 20px;
+  gap:12px;
+}
+
+/* 발신자 아바타 */
+.in-avatar-wrap {
+  width:110px; height:110px;
+  border-radius:50%;
+  background:rgba(255,255,255,0.5);
+  border:3px solid rgba(180,140,220,0.5);
+  display:flex; align-items:center; justify-content:center;
+  font-size:54px;
+  box-shadow: 0 8px 32px rgba(140,100,200,0.25);
+  animation: pulseRing 2s ease infinite;
+}
+@keyframes pulseRing {
+  0%,100% { box-shadow:0 8px 32px rgba(140,100,200,0.25), 0 0 0 0 rgba(140,100,200,0.3); }
+  50%      { box-shadow:0 8px 32px rgba(140,100,200,0.25), 0 0 0 18px rgba(140,100,200,0); }
+}
+
+.in-label { font-size:18px; font-weight:700; color:rgba(40,20,60,0.5); letter-spacing:0.3px; }
+.in-name  { font-size:42px; font-weight:900; color:#1a1a2e; letter-spacing:-1px; text-align:center; }
+.in-number{ font-size:22px; font-weight:500; color:rgba(40,20,60,0.6); text-align:center; }
+
+.in-btns {
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  padding: 0 48px 20px;
+  flex-shrink:0;
+}
+.ib { display:flex; flex-direction:column; align-items:center; gap:14px; cursor:pointer; }
+.ib-circle {
+  width:76px; height:76px; border-radius:50%;
+  display:flex; align-items:center; justify-content:center;
+  transition:transform .12s;
+  box-shadow:0 5px 18px rgba(0,0,0,0.2);
+}
+/* 수락 버튼: 거절(76px)의 1.5배 = 114px */
+.ib-circle.ib-accept {
+  width:114px; height:114px;
+  box-shadow:0 8px 28px rgba(46,158,79,0.45);
+}
+.ib-circle:active { transform:scale(.88); }
+.ib-green { background:#2e9e4f; }
+.ib-red   { background:#d93025; }
+.ib-lbl   { font-size:26px; font-weight:700; color:rgba(40,20,60,0.75); }
+.ib-lbl-lg{ font-size:30px; font-weight:900; color:rgba(40,20,60,0.8); }
+
+/* ══════════════════════════════════════
+   2화면: 통화 중 (ACTIVE)
+   - 상단(고정): 상태바 + 아바타/이름 + 타이머
+   - 중간(스크롤): 말풍선 대화창
+   - 하단(고정): 컨트롤 패널 + 홈바
+══════════════════════════════════════ */
+#sc-active {
+  background:linear-gradient(135deg,#f0e6ff 0%,#fce4f0 25%,#e8d8f8 50%,#ffd6e8 75%,#e4d4f8 100%);
+  background-size:300% 300%;
+  animation:gradFlow 6s ease infinite;
+}
+
+/* 고정 상단 영역 */
+.ac-header {
+  flex-shrink:0;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  padding: 10px 20px 12px;
+  gap:6px;
+}
+.ac-timer  { font-size:22px; font-weight:700; color:rgba(40,20,60,0.55); }
+.ac-avatar {
+  width:80px; height:80px; border-radius:50%;
+  background:rgba(255,255,255,0.55);
+  border:3px solid rgba(180,140,220,0.5);
+  display:flex; align-items:center; justify-content:center;
+  font-size:40px;
+}
+.ac-name { font-size:32px; font-weight:900; color:#1a1a2e; letter-spacing:-0.5px; }
+.ac-sub  { font-size:19px; color:rgba(40,20,60,0.5); font-weight:500; }
+
+/* ★★ 스크롤 되는 대화창 ★★ */
+.bubble-zone {
+  flex:1;
+  overflow-y:auto;
+  -webkit-overflow-scrolling:touch;
+  padding: 8px 14px 12px;
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+  /* 스크롤바 스타일 */
+  scrollbar-width:thin;
+  scrollbar-color: rgba(140,100,200,0.3) transparent;
+}
+.bubble-zone::-webkit-scrollbar { width:4px; }
+.bubble-zone::-webkit-scrollbar-track { background:transparent; }
+.bubble-zone::-webkit-scrollbar-thumb { background:rgba(140,100,200,0.35); border-radius:2px; }
+
+.bbl {
+  max-width:82%;
+  padding:10px 15px;
+  border-radius:18px;
+  font-size:19px;
+  line-height:1.5;
+  animation:fu .28s ease;
+  word-break:keep-all;
+}
+@keyframes fu { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:translateY(0)} }
+.bai {
+  background:rgba(255,255,255,0.72);
+  color:#1a1a2e;
+  border-bottom-left-radius:3px;
+  align-self:flex-start;
+  border:1px solid rgba(200,180,230,0.4);
+}
+.bus {
+  background:rgba(180,240,190,0.75);
+  color:#1a3020;
+  border-bottom-right-radius:3px;
+  align-self:flex-end;
+  border:1px solid rgba(120,200,140,0.4);
+}
+
+/* ★★ 고정 하단 컨트롤 (스크롤 제외) ★★ */
+.ac-bottom {
+  flex-shrink:0;
+  background:rgba(255,255,255,0.15);
+  backdrop-filter:blur(8px);
+  -webkit-backdrop-filter:blur(8px);
+  border-top:1px solid rgba(200,180,230,0.3);
+}
+.ac-panel {
+  margin:10px 12px 8px;
+  background:rgba(255,255,255,0.55);
+  border-radius:24px;
+  padding:16px 16px 14px;
+  border:1.5px solid rgba(200,180,230,0.5);
+  box-shadow:0 4px 20px rgba(140,100,200,0.1);
+}
+.ctrl-3 {
+  display:flex;
+  justify-content:space-around;
+  align-items:flex-start;
+}
+.ci { display:flex; flex-direction:column; align-items:center; gap:7px; cursor:pointer; padding:2px 6px; }
+.ciw {
+  width:60px; height:60px; border-radius:50%;
+  background:rgba(255,255,255,0.7);
+  border:1.5px solid rgba(180,150,220,0.35);
+  display:flex; align-items:center; justify-content:center;
+  transition:all .15s;
+  box-shadow:0 2px 8px rgba(140,100,200,0.12);
+}
+.ciw:active, .ciw.on { background:rgba(180,150,230,0.3); border-color:rgba(140,100,200,0.5); }
+.clbl { font-size:17px; color:rgba(40,20,60,0.75); text-align:center; font-weight:700; }
+
+.end-circle {
+  width:68px; height:68px; border-radius:50%; background:#d93025;
+  display:flex; align-items:center; justify-content:center;
+  cursor:pointer; transition:transform .12s;
+  box-shadow:0 5px 18px rgba(217,48,37,0.45);
+}
+.end-circle:active { transform:scale(.88); }
+
+.nav-soft {
+  display:flex; justify-content:space-around; align-items:center;
+  padding:6px 20px 14px;
+  background:transparent;
+}
+
+/* ══════════════════════════════════════
+   3화면: 통화 종료 (ENDED)
+══════════════════════════════════════ */
+#sc-end { background:#f5f5f7; }
+
+.end-top {
+  padding:12px 20px 0;
+  flex-shrink:0;
+  background:#f5f5f7;
+}
+.end-status {
+  font-size:20px; font-weight:700; color:#d93025;
+  display:flex; align-items:center; gap:8px; margin-bottom:14px;
+}
+.end-name   { font-size:34px; font-weight:900; color:#1a1a1a; letter-spacing:-0.7px; margin-bottom:4px; }
+.end-number { font-size:19px; color:#999; margin-bottom:16px; font-weight:500; }
+
+.end-action-row {
+  display:flex; justify-content:center; gap:18px;
+  padding:0 20px 18px;
+  flex-shrink:0;
+  background:#f5f5f7;
+}
+.ea { display:flex; flex-direction:column; align-items:center; gap:9px; cursor:pointer; }
+.ea-circle {
+  width:62px; height:62px; border-radius:50%;
+  display:flex; align-items:center; justify-content:center;
+  box-shadow:0 3px 12px rgba(0,0,0,0.14);
+}
+.ea-green{background:#2e9e4f;} .ea-blue{background:#1e88e5;} .ea-teal{background:#00897b;}
+.ea-lbl { font-size:15px; color:#555; font-weight:600; }
+
+/* 스크롤 가능한 요약 영역 */
+.sum-wrap {
+  flex:1;
+  overflow-y:auto;
+  -webkit-overflow-scrolling:touch;
+  background:#efefef;
+  scrollbar-width:thin;
+  scrollbar-color:rgba(0,0,0,0.15) transparent;
+}
+.sum-wrap::-webkit-scrollbar { width:4px; }
+.sum-wrap::-webkit-scrollbar-thumb { background:rgba(0,0,0,0.15); border-radius:2px; }
+.sum-inner { padding:12px 14px 16px; }
+
+/* ★★ 지금 바로 해야 할 일 카드 ★★ */
+.urgent-card {
+  background: linear-gradient(135deg, #fff8e1 0%, #fff3cd 100%);
+  border-radius:18px;
+  padding:15px 17px;
+  margin-bottom:10px;
+  border:1.5px solid #ffcc02;
+  box-shadow:0 3px 14px rgba(255,180,0,0.2);
+}
+.urgent-title {
+  display:flex; align-items:center; gap:8px;
+  font-size:16px; font-weight:900; color:#b45309;
+  letter-spacing:.3px; margin-bottom:12px;
+  text-transform:uppercase;
+}
+.urgent-badge {
+  background:#d97706; color:#fff;
+  border-radius:6px; padding:2px 8px;
+  font-size:12px; font-weight:700;
+}
+.urg-item {
+  display:flex; align-items:flex-start; gap:10px;
+  padding:9px 0;
+  border-bottom:1px solid rgba(180,140,0,0.15);
+}
+.urg-item:last-child { border-bottom:none; padding-bottom:0; }
+.urg-ico {
+  width:40px; height:40px; border-radius:12px;
+  display:flex; align-items:center; justify-content:center;
+  font-size:20px; flex-shrink:0;
+}
+.ui-red    { background:#ffebee; }
+.ui-orange { background:#fff3e0; }
+.ui-blue   { background:#e3f2fd; }
+.urg-txt { flex:1; }
+.urg-txt strong { font-size:18px; color:#1a1a1a; font-weight:700; display:block; line-height:1.3; }
+.urg-txt span   { font-size:14px; color:#888; margin-top:2px; display:block; }
+.urg-badge {
+  padding:4px 10px; border-radius:20px;
+  font-size:13px; font-weight:700; flex-shrink:0; align-self:flex-start; margin-top:3px;
+}
+.ub-red    { background:#ffebee; color:#c62828; }
+.ub-orange { background:#fff3e0; color:#e65100; }
+
+/* 기존 요약 카드 */
+.sc {
+  background:#fff;
+  border-radius:18px;
+  padding:14px 16px;
+  margin-bottom:10px;
+  border:.5px solid #e0e0e0;
+}
+.sc-ttl {
+  font-size:15px; font-weight:700; color:#bbb;
+  letter-spacing:.4px; text-transform:uppercase; margin-bottom:12px;
+}
+.si {
+  display:flex; align-items:center; gap:10px;
+  padding:8px 0; border-bottom:.5px solid #f2f2f2;
+}
+.si:last-child { border-bottom:none; padding-bottom:0; }
+.si-ico {
+  width:36px; height:36px; border-radius:10px;
+  display:flex; align-items:center; justify-content:center;
+  font-size:18px; flex-shrink:0;
+}
+.ig{background:#e8f5e9} .io{background:#fff3e0} .ib2{background:#e3f2fd} .ir{background:#ffebee}
+.si-txt { flex:1; }
+.si-txt strong { font-size:17px; color:#1a1a1a; font-weight:700; display:block; }
+.si-txt span   { font-size:15px; color:#888; margin-top:1px; display:block; }
+.sbg { padding:3px 10px; border-radius:20px; font-size:13px; font-weight:700; flex-shrink:0; }
+.bok  { background:#e8f5e9; color:#2e7d32; }
+.bwarn{ background:#fff3e0; color:#e65100; }
+
+.sync-row {
+  background:#e3f2fd; border-radius:12px;
+  padding:10px 14px; margin-bottom:10px;
+  display:flex; align-items:center; gap:9px;
+}
+.sync-row span { font-size:16px; color:#0C447C; line-height:1.4; font-weight:500; }
+
+.nxt {
+  background:#fff; border-radius:16px;
+  padding:12px 15px; border:.5px solid #e0e0e0;
+  display:flex; align-items:center; gap:12px;
+}
+.nxt-ico {
+  width:40px; height:40px; background:#e8f5e9;
+  border-radius:12px; display:flex; align-items:center;
+  justify-content:center; font-size:20px; flex-shrink:0;
+}
+.nxt-txt strong { font-size:17px; color:#1a1a1a; font-weight:700; }
+.nxt-txt span   { font-size:14px; color:#aaa; display:block; margin-top:2px; }
+
+.nav-light-bar {
+  display:flex; justify-content:space-around; align-items:center;
+  padding:7px 20px 18px; background:#efefef; flex-shrink:0;
+}
+
+/* ══ 반응형: 폰 프레임 없이 전체화면으로 볼 때 ══ */
+@media (max-width:400px) {
+  body { background:#fff; align-items:flex-start; justify-content:flex-start; }
+  .phone {
+    width:100vw;
+    height:100dvh;
+    border-radius:0;
+    border:none;
+    box-shadow:none;
+  }
+}
+</style>
+</head>
+<body>
+
+<div class="phone">
+
+  <!-- ══ 1화면: 전화 수신 ══ -->
+  <div class="screen active light-bg" id="sc-in">
+    <!-- 상단바 -->
+    <div class="sb" style="color:#1a1a2e;">
+      <span>9:41</span>
+      <div class="sb-icons">
+        <svg width="17" height="13" viewBox="0 0 17 13" fill="rgba(26,26,46,0.85)"><rect x="0" y="9" width="3" height="4" rx="0.5"/><rect x="4.5" y="6" width="3" height="7" rx="0.5"/><rect x="9" y="3" width="3" height="10" rx="0.5"/><rect x="13.5" y="0" width="3" height="13" rx="0.5"/></svg>
+        <svg width="16" height="12" viewBox="0 0 16 12" fill="none" stroke="rgba(26,26,46,0.85)" stroke-width="1.6" stroke-linecap="round"><path d="M8 10.5 L8 10.6" stroke-width="2.2"/><path d="M5.2 7.8 Q8 5.2 10.8 7.8"/><path d="M2.4 5.0 Q8 0.5 13.6 5.0"/></svg>
+        <svg width="25" height="13" viewBox="0 0 25 13" fill="none"><rect x="0.5" y="0.5" width="21" height="12" rx="2.5" stroke="rgba(26,26,46,0.85)" stroke-width="1.2"/><rect x="22.5" y="4" width="2" height="5" rx="1" fill="rgba(26,26,46,0.6)"/><rect x="2" y="2" width="16" height="9" rx="1.5" fill="rgba(26,26,46,0.85)"/></svg>
+      </div>
+    </div>
+
+    <!-- 발신자 정보 -->
+    <div class="in-caller-area">
+      <div class="in-avatar-wrap">🤖</div>
+      <p class="in-label">전화가 왔어요</p>
+      <p class="in-name">여보세요</p>
+      <p class="in-number">AI 안부 전화</p>
+    </div>
+
+    <!-- 수신 / 거절 버튼 -->
+    <div class="in-btns">
+      <div class="ib" onclick="goTo('sc-in','sc-active');startCall()">
+        <div class="ib-circle ib-green ib-accept">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07A19.5 19.5 0 013.07 9.81 19.79 19.79 0 01.01 1.18 2 2 0 012 0h3a2 2 0 012 1.72 12.84 12.84 0 00.7 2.81 2 2 0 01-.45 2.11L6 7.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45 12.84 12.84 0 002.81.7A2 2 0 0122 14.92z"/></svg>
+        </div>
+        <span class="ib-lbl-lg">받기</span>
+      </div>
+      <div class="ib" onclick="goTo('sc-in','sc-end')">
+        <div class="ib-circle ib-red">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M10.68 13.31a16 16 0 003.41 2.6l1.27-1.27a2 2 0 012.11-.45 12.84 12.84 0 002.81.7 2 2 0 011.72 2v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07A19.42 19.42 0 013.43 9.19 2 2 0 015.41 7h3a2 2 0 012 1.72 12.84 12.84 0 00.7 2.81 2 2 0 01-.45 2.11l-1.27 1.27z"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
+        </div>
+        <span class="ib-lbl">거절</span>
+      </div>
+    </div>
+
+    <div class="home-bar"><div class="hb-light"></div></div>
+  </div>
+
+  <!-- ══ 2화면: 통화 중 ══ -->
+  <div class="screen light-bg" id="sc-active">
+
+    <!-- ★ 고정 상단: 상태바 + 아바타/이름 -->
+    <div class="sb" style="color:#1a1a2e; flex-shrink:0;">
+      <span>9:41</span>
+      <div class="sb-icons">
+        <svg width="17" height="13" viewBox="0 0 17 13" fill="rgba(26,26,46,0.85)"><rect x="0" y="9" width="3" height="4" rx="0.5"/><rect x="4.5" y="6" width="3" height="7" rx="0.5"/><rect x="9" y="3" width="3" height="10" rx="0.5"/><rect x="13.5" y="0" width="3" height="13" rx="0.5"/></svg>
+        <svg width="16" height="12" viewBox="0 0 16 12" fill="none" stroke="rgba(26,26,46,0.85)" stroke-width="1.6" stroke-linecap="round"><path d="M8 10.5 L8 10.6" stroke-width="2.2"/><path d="M5.2 7.8 Q8 5.2 10.8 7.8"/><path d="M2.4 5.0 Q8 0.5 13.6 5.0"/></svg>
+        <svg width="25" height="13" viewBox="0 0 25 13" fill="none"><rect x="0.5" y="0.5" width="21" height="12" rx="2.5" stroke="rgba(26,26,46,0.85)" stroke-width="1.2"/><rect x="22.5" y="4" width="2" height="5" rx="1" fill="rgba(26,26,46,0.6)"/><rect x="2" y="2" width="16" height="9" rx="1.5" fill="rgba(26,26,46,0.85)"/></svg>
+      </div>
+    </div>
+
+    <div class="ac-header">
+      <div class="ac-timer" id="timer">통화 중...</div>
+      <div class="ac-avatar">🤖</div>
+      <p class="ac-name">여보세요</p>
+      <p class="ac-sub">AI 안부 전화</p>
+    </div>
+
+    <!-- ★★ 스크롤 되는 대화창 ★★ -->
+    <div class="bubble-zone" id="bzone"></div>
+
+    <!-- ★★ 고정 하단: 컨트롤 + 홈바 (스크롤 제외) ★★ -->
+    <div class="ac-bottom">
+      <div class="ac-panel">
+        <div class="ctrl-3">
+          <div class="ci" onclick="tog(this)">
+            <div class="ciw">
+              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#4a2a80" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 010 7.07M19.07 4.93a10 10 0 010 14.14"/></svg>
+            </div>
+            <span class="clbl">스피커</span>
+          </div>
+          <div class="ci">
+            <div class="end-circle" onclick="endCall()">
+              <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M10.68 13.31a16 16 0 003.41 2.6l1.27-1.27a2 2 0 012.11-.45 12.84 12.84 0 002.81.7 2 2 0 011.72 2v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07A19.42 19.42 0 013.43 9.19 2 2 0 015.41 7h3a2 2 0 012 1.72 12.84 12.84 0 00.7 2.81 2 2 0 01-.45 2.11l-1.27 1.27z"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
+            </div>
+            <span class="clbl">통화 종료</span>
+          </div>
+          <div class="ci" onclick="tog(this)">
+            <div class="ciw">
+              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#4a2a80" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 9a4 4 0 018 0c0 2.5-2.5 4-4 4"/><circle cx="12" cy="18" r="1" fill="#4a2a80"/></svg>
+            </div>
+            <span class="clbl">블루투스</span>
+          </div>
+        </div>
+      </div>
+      <div class="nav-soft">
+        <div style="color:rgba(40,20,60,0.4);font-size:14px;letter-spacing:2px;">|||</div>
+        <div style="color:rgba(40,20,60,0.4);font-size:24px;">○</div>
+        <div style="color:rgba(40,20,60,0.4);font-size:20px;">&lt;</div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ══ 3화면: 통화 종료 ══ -->
+  <div class="screen" id="sc-end">
+
+    <!-- 고정 상단 -->
+    <div class="sb" style="color:#1a1a1a; background:#f5f5f7; flex-shrink:0;">
+      <span>9:47</span>
+      <div class="sb-icons">
+        <svg width="17" height="13" viewBox="0 0 17 13" fill="rgba(26,26,26,0.85)"><rect x="0" y="9" width="3" height="4" rx="0.5"/><rect x="4.5" y="6" width="3" height="7" rx="0.5"/><rect x="9" y="3" width="3" height="10" rx="0.5"/><rect x="13.5" y="0" width="3" height="13" rx="0.5"/></svg>
+        <svg width="16" height="12" viewBox="0 0 16 12" fill="none" stroke="rgba(26,26,26,0.85)" stroke-width="1.6" stroke-linecap="round"><path d="M8 10.5 L8 10.6" stroke-width="2.2"/><path d="M5.2 7.8 Q8 5.2 10.8 7.8"/><path d="M2.4 5.0 Q8 0.5 13.6 5.0"/></svg>
+        <svg width="25" height="13" viewBox="0 0 25 13" fill="none"><rect x="0.5" y="0.5" width="21" height="12" rx="2.5" stroke="rgba(26,26,26,0.85)" stroke-width="1.2"/><rect x="22.5" y="4" width="2" height="5" rx="1" fill="rgba(26,26,26,0.6)"/><rect x="2" y="2" width="16" height="9" rx="1.5" fill="rgba(26,26,26,0.85)"/></svg>
+      </div>
+    </div>
+
+    <div class="end-top">
+      <div class="end-status">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#d93025" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.68 13.31a16 16 0 003.41 2.6l1.27-1.27a2 2 0 012.11-.45 12.84 12.84 0 002.81.7 2 2 0 011.72 2v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07A19.42 19.42 0 013.43 9.19 2 2 0 015.41 7h3a2 2 0 012 1.72 12.84 12.84 0 00.7 2.81 2 2 0 01-.45 2.11l-1.27 1.27z"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
+        통화 종료
+      </div>
+      <p class="end-name">여보세요</p>
+      <p class="end-number">AI 안부 전화</p>
+    </div>
+
+    <div class="end-action-row">
+      <div class="ea">
+        <div class="ea-circle ea-green">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07A19.5 19.5 0 013.07 9.81 19.79 19.79 0 01.01 1.18 2 2 0 012 0h3a2 2 0 012 1.72 12.84 12.84 0 00.7 2.81 2 2 0 01-.45 2.11L6 7.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45 12.84 12.84 0 002.81.7A2 2 0 0122 14.92z"/></svg>
+        </div>
+        <span class="ea-lbl">다시 전화</span>
+      </div>
+      <div class="ea">
+        <div class="ea-circle ea-blue">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+        </div>
+        <span class="ea-lbl">문자 전송</span>
+      </div>
+      <div class="ea">
+        <div class="ea-circle ea-teal">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>
+        </div>
+        <span class="ea-lbl">보호자 알림</span>
+      </div>
+    </div>
+
+    <!-- 스크롤 가능한 요약 영역 -->
+    <div class="sum-wrap">
+      <div class="sum-inner">
+
+        <!-- ★★ 지금 바로 해야 할 일 ★★ -->
+        <div class="urgent-card">
+          <div class="urgent-title">
+            <span>⚡</span>
+            <span>지금 바로 해야 할 일</span>
+            <span class="urgent-badge">2가지</span>
+          </div>
+
+          <div class="urg-item">
+            <div class="urg-ico ui-red">💊</div>
+            <div class="urg-txt">
+              <strong>혈압약 복용 확인</strong>
+              <span>오늘 복용 여부를 확인해주세요</span>
+            </div>
+            <span class="urg-badge ub-red">지금 바로</span>
+          </div>
+
+          <div class="urg-item">
+            <div class="urg-ico ui-orange">🏥</div>
+            <div class="urg-txt">
+              <strong>내일 정형외과 예약 확인</strong>
+              <span>내일 오후 2시 — 교통편 준비</span>
+            </div>
+            <span class="urg-badge ub-orange">내일 오전</span>
+          </div>
+        </div>
+
+        <!-- 오늘 상태 요약 -->
+        <div class="sc">
+          <p class="sc-ttl">오늘 상태 요약</p>
+          <div class="si">
+            <div class="si-ico ig">🍚</div>
+            <div class="si-txt"><strong>식사</strong><span>아침 식사 하셨다고 말씀하심</span></div>
+            <span class="sbg bok">완료</span>
+          </div>
+          <div class="si">
+            <div class="si-ico ib2">💊</div>
+            <div class="si-txt"><strong>복약</strong><span>혈압약 복용 여부 확인 필요</span></div>
+            <span class="sbg bwarn">확인필요</span>
+          </div>
+          <div class="si">
+            <div class="si-ico io">😊</div>
+            <div class="si-txt"><strong>기분</strong><span>기분 좋다고 하심</span></div>
+            <span class="sbg bok">양호</span>
+          </div>
+          <div class="si">
+            <div class="si-ico ir">🏥</div>
+            <div class="si-txt"><strong>병원 일정</strong><span>내일 오후 2시 정형외과</span></div>
+            <span class="sbg bwarn">내일</span>
+          </div>
+        </div>
+
+        <div class="sync-row">
+          <span>☁️</span>
+          <span>통화 데이터가 보호자 앱에 자동으로 전송되었습니다.</span>
+        </div>
+
+        <div class="nxt">
+          <div class="nxt-ico">📅</div>
+          <div class="nxt-txt">
+            <strong>다음 전화 예정</strong>
+            <span>내일 오전 9시 40분 · 안부 + 병원 일정</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <div class="nav-light-bar">
+      <div style="color:#888;font-size:14px;letter-spacing:2px;">|||</div>
+      <div style="color:#888;font-size:24px;">○</div>
+      <div style="color:#888;font-size:20px;">&lt;</div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+/* ── 화면 전환 ── */
+function goTo(a, b) {
+  document.getElementById(a).classList.remove('active');
+  document.getElementById(b).classList.add('active');
+}
+
+/* ── 토글 ── */
+function tog(el) {
+  const w = el.querySelector('.ciw');
+  w.classList.toggle('on');
+}
+
+/* ── 통화 타이머 & 대화 시뮬레이션 ── */
+let iv = null, secs = 0, step = 0;
+const conv = [
+  { w:'ai',   t:'안녕하세요, 순자 어르신! 오늘 아침은 어떻게 보내고 계세요?' },
+  { w:'user', t:'어, 여보세요? 응 나야. 잘 있어.' },
+  { w:'ai',   t:'다행이에요! 오늘 아침 식사는 하셨나요?' },
+  { w:'user', t:'응, 밥 먹었어. 날씨 좋아서 창문 열어놨지.' },
+  { w:'ai',   t:'혈압약은 오늘 챙겨 드셨나요? 잊지 않으셨죠?' },
+  { w:'user', t:'아이고, 맞다. 아직 못 먹었네.' },
+  { w:'ai',   t:'지금 드시면 돼요! 😊 그리고 내일 오후 2시 정형외과 예약 잊지 마세요!' },
+  { w:'user', t:'그래 알았어, 고마워.' },
+  { w:'ai',   t:'네, 어르신! 오늘도 좋은 하루 보내세요. 내일 또 전화드릴게요!' },
+];
+
+function addB(w, t) {
+  const z = document.getElementById('bzone');
+  const d = document.createElement('div');
+  d.className = 'bbl ' + (w === 'ai' ? 'bai' : 'bus');
+  d.textContent = t;
+  z.appendChild(d);
+  /* 새 말풍선이 생기면 맨 아래로 스크롤 */
+  z.scrollTop = z.scrollHeight;
+}
+
+function startCall() {
+  secs = 0; step = 0;
+  document.getElementById('bzone').innerHTML = '';
+  iv = setInterval(() => {
+    secs++;
+    const m = String(Math.floor(secs / 60)).padStart(2, '0');
+    const s = String(secs % 60).padStart(2, '0');
+    document.getElementById('timer').textContent = m + ':' + s;
+    if (step < conv.length && secs % 3 === 1) {
+      const c = conv[step++];
+      addB(c.w, c.t);
+    }
+  }, 1000);
+}
+
+function endCall() {
+  clearInterval(iv);
+  goTo('sc-active', 'sc-end');
+}
+</script>
+</body>
+</html>

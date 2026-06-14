@@ -1,0 +1,80 @@
+<svg width="1000" height="560" viewBox="0 0 1000 560" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .title { font: bold 24px sans-serif; fill: #1a1a1a; }
+    .subtitle { font: 16px sans-serif; fill: #333333; }
+    .box { fill: #f7fafc; stroke: #2b6cb0; stroke-width: 2; rx: 16; }
+    .box-alt { fill: #e6fffa; stroke: #319795; stroke-width: 2; rx: 16; }
+    .text { font: 16px sans-serif; fill: #1a202c; }
+    .small { font: 14px sans-serif; fill: #4a5568; }
+    .arrow { fill: none; stroke: #2d3748; stroke-width: 3; marker-end: url(#arrowhead); }
+    .note { font: 14px sans-serif; fill: #1a202c; }
+    .cloud { fill: #f0fff4; stroke: #38a169; stroke-width: 2; rx: 24; }
+  </style>
+
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#2d3748" />
+    </marker>
+  </defs>
+
+  <text x="30" y="40" class="title">YeoboSay AI 전화 서비스 흐름</text>
+  <text x="30" y="70" class="subtitle">사용자, 앱, 백엔드, AI 조율, 암호화 통화 기록의 연결</text>
+
+  <rect x="40" y="110" width="240" height="150" class="box" />
+  <text x="70" y="150" class="text">사용자</text>
+  <text x="70" y="180" class="small">스마트폰에서</text>
+  <text x="70" y="200" class="small">통화 시작</text>
+
+  <rect x="330" y="90" width="260" height="210" class="box-alt" />
+  <text x="380" y="130" class="text">Android 앱</text>
+  <text x="380" y="160" class="small">음성 입력 수집</text>
+  <text x="380" y="180" class="small">STT → 서버 전송</text>
+  <text x="380" y="200" class="small">TTS 음성 재생</text>
+
+  <rect x="660" y="110" width="260" height="150" class="box" />
+  <text x="690" y="150" class="text">백엔드 서버</text>
+  <text x="690" y="180" class="small">세션 관리</text>
+  <text x="690" y="200" class="small">대화 턴 저장</text>
+
+  <rect x="330" y="320" width="260" height="160" class="cloud" />
+  <text x="360" y="360" class="text">AI 오케스트레이터</text>
+  <text x="360" y="390" class="small">대화 흐름 제어</text>
+  <text x="360" y="410" class="small">응답 생성 + 다음 발화 유도</text>
+
+  <rect x="660" y="320" width="260" height="160" class="box-alt" />
+  <text x="700" y="360" class="text">암호화된 통화 기록</text>
+  <text x="700" y="390" class="small">서버 저장소</text>
+  <text x="700" y="410" class="small">대화 내역 안전 보관</text>
+
+  <line x1="280" y1="170" x2="330" y2="170" class="arrow" />
+  <text x="310" y="150" class="small" text-anchor="middle">음성 요청</text>
+
+  <line x1="590" y1="170" x2="660" y2="170" class="arrow" />
+  <text x="620" y="150" class="small" text-anchor="middle">STT + 세션 생성</text>
+
+  <line x1="790" y1="260" x2="790" y2="320" class="arrow" />
+  <text x="815" y="290" class="small">대화 흐름 트리거</text>
+
+  <line x1="560" y1="400" x2="660" y2="400" class="arrow" />
+  <text x="610" y="390" class="small" text-anchor="middle">암호화 저장</text>
+
+  <line x1="590" y1="350" x2="660" y2="350" class="arrow" />
+  <text x="620" y="340" class="small" text-anchor="middle">대화 기록 업로드</text>
+
+  <line x1="520" y1="420" x2="520" y2="300" class="arrow" />
+  <text x="525" y="360" class="small">대화 맥락</text>
+
+  <line x1="660" y1="210" x2="590" y2="210" class="arrow" marker-end="url(#arrowhead)" />
+  <text x="620" y="230" class="small" text-anchor="middle">TTS 음성 반환</text>
+
+  <line x1="620" y1="210" x2="380" y2="210" class="arrow" marker-end="url(#arrowhead)" />
+  <text x="500" y="230" class="small" text-anchor="middle">AI 응답</text>
+
+  <line x1="380" y1="260" x2="380" y2="320" class="arrow" />
+  <text x="380" y="290" class="small" text-anchor="middle">응답 요청</text>
+
+  <line x1="600" y1="260" x2="660" y2="260" class="arrow" />
+  <text x="630" y="250" class="small" text-anchor="middle">대화 확인</text>
+
+  <text x="70" y="520" class="note">※ 사용자 음성은 앱에서 백엔드로 전달되고, 백엔드는 AI 오케스트레이터를 통해 대화를 조율하며 암호화된 통화 내역을 안전하게 저장합니다.</text>
+</svg>
